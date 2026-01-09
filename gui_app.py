@@ -887,6 +887,9 @@ class AISupportAnalyzerGUI:
                 self.log_queue.put(('status', 'Analysis failed ❌'))
                 
         except Exception as e:
+            import traceback
+            print(f"[DEBUG] EXCEPTION in run_analysis: {str(e)}", flush=True)
+            print(traceback.format_exc(), flush=True)
             self.log_queue.put(('log', f"❌ Error: {str(e)}"))
             self.log_queue.put(('status', 'Analysis failed ❌'))
             
@@ -925,13 +928,18 @@ class AISupportAnalyzerGUI:
                     self.log_queue.put(('log', "⏹ Analysis cancelled by user"))
                     return False
                 if not self.run_python_script("support-data-precleanup.py", [f"-file={current_file}"]):
+                    print(f"[DEBUG] precleanup script returned False", flush=True)
                     return False
+                
+                print(f"[DEBUG] precleanup script returned True, continuing...", flush=True)
                 
                 # Aggressive memory cleanup after each script
                 gc.collect()
                 
+                print(f"[DEBUG] Looking for preclean file in: {self.input_file_dir}", flush=True)
                 # Find the cleaned input file
                 current_file = self.find_latest_file("*-preclean*.csv", search_dir=self.input_file_dir)
+                print(f"[DEBUG] find_latest_file returned: {current_file}", flush=True)
                 if not current_file:
                     self.log_queue.put(('log', "❌ Could not find pre-cleaned file"))
                     # Try to predict what the filename should be
@@ -945,12 +953,16 @@ class AISupportAnalyzerGUI:
                         self.log_queue.put(('log', f"   ❌ Expected file does not exist either"))
                         return False
                 step_counter += 1
+                print(f"[DEBUG] Moving to Step 2, step_counter={step_counter}", flush=True)
                 
                 # Step 2: Main analysis
                 self.log_queue.put(('log', f"📋 Step {step_counter}: Running core CSAT analysis..."))
+                print(f"[DEBUG] Queued Step 2 log message", flush=True)
                 if self.cancel_requested:
                     self.log_queue.put(('log', "⏹ Analysis cancelled by user"))
+                    print(f"[DEBUG] Cancelled before main-analysis", flush=True)
                     return False
+                print(f"[DEBUG] About to run main-analysis-process.py with file: {current_file}", flush=True)
                 if not self.run_python_script("main-analysis-process.py", [f"-file={current_file}"]):
                     return False
                 
@@ -1109,6 +1121,9 @@ class AISupportAnalyzerGUI:
             return True
             
         except Exception as e:
+            import traceback
+            print(f"[DEBUG] EXCEPTION in run_analysis_pipeline: {str(e)}", flush=True)
+            print(traceback.format_exc(), flush=True)
             self.log_queue.put(('log', f"❌ Pipeline error: {str(e)}"))
             os.chdir(original_cwd)
             return False
@@ -1239,11 +1254,16 @@ class AISupportAnalyzerGUI:
             elapsed_time = time.time() - start_time
             elapsed_mins = int(elapsed_time / 60)
             
+            # Debug: Print return code to terminal for troubleshooting
+            print(f"[DEBUG] {script_name} finished with return code: {return_code}", flush=True)
+            
             if return_code == 0:
+                print(f"[DEBUG] About to log success message for {script_name}", flush=True)
                 if elapsed_mins > 0:
                     self.log_queue.put(('log', f"   ✅ {script_name} completed in {elapsed_mins}m {elapsed_time%60:.1f}s"))
                 else:
                     self.log_queue.put(('log', f"   ✅ {script_name} completed in {elapsed_time:.1f}s"))
+                print(f"[DEBUG] Success message queued, about to cleanup for {script_name}", flush=True)
                 
                 # Aggressive memory cleanup after script completion
                 if stdout_lock and stdout_lines:
@@ -1252,11 +1272,13 @@ class AISupportAnalyzerGUI:
                 if stderr_lock and stderr_lines:
                     with stderr_lock:
                         stderr_lines.clear()
-                del stdout_lines, stderr_lines, stdout_thread, stderr_thread, stdout_lock, stderr_lock, process
+                del stdout_lines, stderr_lines, stdout_lock, stderr_lock
                 gc.collect()
                 
+                print(f"[DEBUG] run_python_script returning True for {script_name}", flush=True)
                 return True
             else:
+                print(f"[DEBUG] {script_name} FAILED with exit code: {return_code}", flush=True)
                 self.log_queue.put(('log', f"   ❌ {script_name} failed with exit code {return_code}"))
                 if stderr_lines:
                     for line in stderr_lines[-10:]:  # Show last 10 error lines
@@ -1275,7 +1297,7 @@ class AISupportAnalyzerGUI:
                             stderr_lines.clear()
                     except:
                         pass
-                del stdout_lines, stderr_lines, stdout_thread, stderr_thread, stdout_lock, stderr_lock, process
+                del stdout_lines, stderr_lines, stdout_lock, stderr_lock
                 gc.collect()
                 
                 return False
@@ -1289,6 +1311,9 @@ class AISupportAnalyzerGUI:
             return False
             
         except Exception as e:
+            import traceback
+            print(f"[DEBUG] Exception in run_python_script: {str(e)}", flush=True)
+            print(traceback.format_exc(), flush=True)
             self.log_queue.put(('log', f"   ❌ Error running {script_name}: {str(e)}"))
             if process:
                 try:
@@ -1300,8 +1325,10 @@ class AISupportAnalyzerGUI:
             return False
         
         finally:
+            print(f"[DEBUG] Entering finally block", flush=True)
             # Always restore working directory
             os.chdir(original_cwd)
+            print(f"[DEBUG] Restored cwd to {original_cwd}", flush=True)
             
             # Aggressive cleanup
             if process:
@@ -1339,6 +1366,7 @@ class AISupportAnalyzerGUI:
             # Aggressive garbage collection
             gc.collect()
             gc.collect()  # Second pass to catch circular references
+            print(f"[DEBUG] Exiting finally block", flush=True)
             
     def find_latest_file(self, pattern, search_dir=None):
         """Find the most recently created file matching the given pattern."""
