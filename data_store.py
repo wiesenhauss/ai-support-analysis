@@ -321,6 +321,13 @@ class DataStore:
             
             session.commit()
             
+            # Generate trend snapshots for this batch
+            try:
+                from analytics_engine import generate_trend_snapshots
+                generate_trend_snapshots(self, batch.id)
+            except ImportError:
+                pass  # Analytics engine not available
+            
             return {
                 'batch_id': batch.id,
                 'total_rows': len(df),
