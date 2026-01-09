@@ -124,10 +124,40 @@ class DataStore:
         if isinstance(value, (datetime, date)):
             return value.date() if isinstance(value, datetime) else value
         
-        # Try common date formats
-        for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y', '%Y-%m-%d %H:%M:%S']:
+        # Convert to string and clean
+        str_value = str(value).strip()
+        if not str_value or str_value.lower() in ['nan', 'none', 'nat']:
+            return None
+        
+        # Try pandas to_datetime first (handles many formats)
+        try:
+            parsed = pd.to_datetime(str_value, errors='coerce')
+            if pd.notna(parsed):
+                return parsed.date()
+        except Exception:
+            pass
+        
+        # Try common date formats manually
+        formats = [
+            '%m/%d/%y',           # 10/31/25 (2-digit year) - MOST COMMON IN YOUR DATA
+            '%m/%d/%Y',           # 10/31/2025 (4-digit year)
+            '%m/%d/%y %H:%M:%S',  # With time
+            '%m/%d/%Y %H:%M:%S',
+            '%Y-%m-%d',
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%dT%H:%M:%S',
+            '%Y-%m-%dT%H:%M:%SZ',
+            '%Y-%m-%dT%H:%M:%S.%f',
+            '%Y-%m-%dT%H:%M:%S.%fZ',
+            '%d/%m/%Y',
+            '%d/%m/%Y %H:%M:%S',
+            '%b %d, %Y',
+            '%B %d, %Y',
+        ]
+        
+        for fmt in formats:
             try:
-                return datetime.strptime(str(value)[:19], fmt).date()
+                return datetime.strptime(str_value[:26], fmt).date()
             except ValueError:
                 continue
         

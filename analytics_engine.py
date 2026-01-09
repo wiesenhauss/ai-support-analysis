@@ -223,7 +223,13 @@ class AnalyticsEngine:
         if df.empty:
             return pd.DataFrame()
         
-        df['created_date'] = pd.to_datetime(df['created_date'])
+        df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
+        
+        # Filter out rows without valid dates for trend analysis
+        df = df.dropna(subset=['created_date'])
+        
+        if df.empty:
+            return pd.DataFrame()
         
         # Group by time period
         if granularity == 'day':
@@ -316,7 +322,13 @@ class AnalyticsEngine:
         if df.empty:
             return pd.DataFrame()
         
-        df['created_date'] = pd.to_datetime(df['created_date'])
+        df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
+        
+        # Filter out rows without valid dates for trend analysis
+        df = df.dropna(subset=['created_date'])
+        
+        if df.empty:
+            return pd.DataFrame()
         
         # Group by time period
         if granularity == 'day':
@@ -408,7 +420,13 @@ class AnalyticsEngine:
         if df.empty:
             return pd.DataFrame()
         
-        df['created_date'] = pd.to_datetime(df['created_date'])
+        df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
+        
+        # Filter out rows without valid dates for trend analysis
+        df = df.dropna(subset=['created_date'])
+        
+        if df.empty:
+            return pd.DataFrame()
         
         # Normalize CSAT rating
         df['csat_normalized'] = df['csat_rating'].str.lower()

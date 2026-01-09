@@ -82,10 +82,10 @@ class HistoryDashboard(ttk.Frame):
             except Exception as e:
                 print(f"Failed to initialize analytics: {e}")
         
-        # Chart variables
-        self.current_chart = tk.StringVar(value="sentiment")
+        # Chart variables - default to topics which works without dates
+        self.current_chart = tk.StringVar(value="topics")
         self.granularity = tk.StringVar(value="week")
-        self.date_range = tk.StringVar(value="90")  # days
+        self.date_range = tk.StringVar(value="All")  # Default to All to show data
         
         # Setup UI
         self._setup_ui()
@@ -253,13 +253,15 @@ class HistoryDashboard(ttk.Frame):
     def _get_date_range(self):
         """Get start and end dates based on selection."""
         range_value = self.date_range.get()
-        end_date = date.today()
         
+        # Always return None for both to get all data if dates aren't working
+        # This ensures data is shown even if date parsing failed
         if range_value == "All":
-            start_date = None
-        else:
-            days = int(range_value)
-            start_date = end_date - timedelta(days=days)
+            return None, None
+        
+        end_date = date.today()
+        days = int(range_value)
+        start_date = end_date - timedelta(days=days)
         
         return start_date, end_date
     
@@ -413,7 +415,11 @@ class HistoryDashboard(ttk.Frame):
             )
             
             if df.empty:
-                self._show_no_data_message()
+                self._show_no_data_message(
+                    'No date information available for trend analysis.\n\n'
+                    'Try the "Topics" view for data without dates,\n'
+                    'or import data with valid "Created Date" values.'
+                )
                 return
             
             # Plot sentiment percentages
@@ -490,7 +496,11 @@ class HistoryDashboard(ttk.Frame):
             )
             
             if df.empty:
-                self._show_no_data_message()
+                self._show_no_data_message(
+                    'No date information available for trend analysis.\n\n'
+                    'Try the "Topics" view for data without dates,\n'
+                    'or import data with valid "Created Date" values.'
+                )
                 return
             
             # Plot resolution rate
@@ -530,7 +540,11 @@ class HistoryDashboard(ttk.Frame):
             )
             
             if df.empty:
-                self._show_no_data_message()
+                self._show_no_data_message(
+                    'No date information available for CSAT trend analysis.\n\n'
+                    'Try the "Topics" view for data without dates,\n'
+                    'or import data with valid "Created Date" values.'
+                )
                 return
             
             # Plot satisfaction rate
@@ -558,10 +572,12 @@ class HistoryDashboard(ttk.Frame):
         
         self.canvas.draw()
     
-    def _show_no_data_message(self):
+    def _show_no_data_message(self, message: str = None):
         """Show a message when no data is available."""
         self.ax.clear()
-        self.ax.text(0.5, 0.5, 'No historical data available.\n\nImport analysis results to see trends.',
+        if message is None:
+            message = 'No historical data available.\n\nImport analysis results to see trends.'
+        self.ax.text(0.5, 0.5, message,
                     ha='center', va='center', fontsize=12, color='gray',
                     transform=self.ax.transAxes)
         self.ax.set_xlim(0, 1)
