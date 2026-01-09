@@ -591,7 +591,10 @@ class AISupportAnalyzerGUI:
         self.talk_to_data_button.pack(side=tk.LEFT, padx=(0, 10))
         
         self.import_history_button = ttk.Button(control_frame, text="📊 Import to History", command=self.import_to_history, state=tk.DISABLED)
-        self.import_history_button.pack(side=tk.LEFT)
+        self.import_history_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.history_dashboard_button = ttk.Button(control_frame, text="📈 History Dashboard", command=self.open_history_dashboard)
+        self.history_dashboard_button.pack(side=tk.LEFT)
         
         # Progress Section
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding="10")
@@ -3074,6 +3077,38 @@ Here are the records to analyze:
             error_msg = str(e)
             self.log_message(f"❌ Import failed: {error_msg}")
             messagebox.showerror("Import Failed", f"Failed to import analysis results:\n\n{error_msg}")
+    
+    def open_history_dashboard(self):
+        """Open the historical analytics dashboard."""
+        try:
+            from history_dashboard import open_history_dashboard, ANALYTICS_AVAILABLE
+            
+            if not ANALYTICS_AVAILABLE:
+                messagebox.showinfo(
+                    "No Historical Data",
+                    "The historical analytics feature requires data to be imported first.\n\n"
+                    "1. Run an analysis on a CSV file\n"
+                    "2. Click 'Import to History' to save the results\n"
+                    "3. Then open the History Dashboard to view trends"
+                )
+                return
+            
+            self.log_message("📈 Opening Historical Analytics Dashboard...")
+            dashboard = open_history_dashboard(self.root)
+            
+            if dashboard:
+                self.log_message("   Dashboard opened successfully")
+            
+        except ImportError as e:
+            messagebox.showerror(
+                "Module Error",
+                f"Could not import history dashboard module:\n{str(e)}\n\n"
+                "Please ensure history_dashboard.py is in the application directory."
+            )
+        except Exception as e:
+            error_msg = str(e)
+            self.log_message(f"❌ Dashboard error: {error_msg}")
+            messagebox.showerror("Error", f"Failed to open History Dashboard:\n\n{error_msg}")
 
 def main():
     """Main function to run the GUI application."""
