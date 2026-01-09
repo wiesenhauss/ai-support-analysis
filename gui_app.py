@@ -29,6 +29,13 @@ import pandas as pd
 import platform
 import gc
 
+# Import data store for historical analytics
+try:
+    from data_store import get_data_store, DataStore
+    DATA_STORE_AVAILABLE = True
+except ImportError:
+    DATA_STORE_AVAILABLE = False
+
 class SettingsManager:
     """Secure settings manager for macOS with Keychain integration."""
     
@@ -581,7 +588,10 @@ class AISupportAnalyzerGUI:
         ttk.Button(control_frame, text="📁 Open Output Folder", command=self.open_output_folder).pack(side=tk.LEFT, padx=(0, 10))
         
         self.talk_to_data_button = ttk.Button(control_frame, text="💬 Talk to Data", command=self.open_talk_to_data, state=tk.DISABLED)
-        self.talk_to_data_button.pack(side=tk.LEFT)
+        self.talk_to_data_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.import_history_button = ttk.Button(control_frame, text="📊 Import to History", command=self.import_to_history, state=tk.DISABLED)
+        self.import_history_button.pack(side=tk.LEFT)
         
         # Progress Section
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding="10")
@@ -2844,12 +2854,14 @@ Here are the records to analyze:
         return []
 
     def update_talk_to_data_button(self, filename):
-        """Enable/disable Talk to Data button based on file validation."""
+        """Enable/disable Talk to Data and Import to History buttons based on file validation."""
         if filename and filename.endswith('.csv'):
             self.talk_to_data_button.config(state=tk.NORMAL)
+            self.import_history_button.config(state=tk.NORMAL)
             self.log_message("💬 Talk to Data feature available for this CSV file")
         else:
             self.talk_to_data_button.config(state=tk.DISABLED)
+            self.import_history_button.config(state=tk.DISABLED)
             if filename:
                 self.log_message("💬 Talk to Data requires a CSV file")
     
@@ -2911,6 +2923,157 @@ Here are the records to analyze:
             
             messagebox.showerror("Error", f"Failed to open Talk to Data:\n{error_msg}")
             self.log_message(f"❌ Talk to Data error: {error_msg}")
+    
+    def import_to_history(self):
+        """Import the current analysis results to the historical database."""
+        if not DATA_STORE_AVAILABLE:
+            messagebox.showerror(
+                "Feature Unavailable", 
+                "Historical analytics module is not available.\n\n"
+                "Please ensure data_store.py and models.py are in the application directory."
+            )
+            return
+        
+        # Find the most recent analysis output file
+        input_file = self.input_file_full_path
+        if not input_file:
+            messagebox.showerror("Error", "No file loaded. Please load a CSV file first.")
+            return
+        
+        # Look for analysis output files in the same directory
+        input_dir = os.path.dirname(input_file)
+        import glob
+        
+        # Find analysis output files
+        output_patterns = [
+            "*support-analysis-output*.csv",
+            "*predictive-csat*.csv"
+        ]
+        
+        analysis_files = []
+        for pattern in output_patterns:
+            analysis_files.extend(glob.glob(os.path.join(input_dir, pattern)))
+        
+        if not analysis_files:
+            # No analysis files found, check if current file is an analysis file
+            basename = os.path.basename(input_file).lower()
+            if 'support-analysis' in basename or 'predictive-csat' in basename:
+                analysis_files = [input_file]
+            else:
+                messagebox.showwarning(
+                    "No Analysis Files Found",
+                    "Could not find any analysis output files in the current directory.\n\n"
+                    "Please run an analysis first, or load a file that contains analysis results "
+                    "(filename should contain 'support-analysis-output' or 'predictive-csat')."
+                )
+                return
+        
+        # If multiple files, let user choose or use most recent
+        if len(analysis_files) > 1:
+            # Sort by modification time, newest first
+            analysis_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            
+            # Create selection dialog
+            dialog = tk.Toplevel(self.root)
+            dialog.title("Select File to Import")
+            dialog.geometry("600x400")
+            dialog.transient(self.root)
+            dialog.grab_set()
+            
+            ttk.Label(dialog, text="Multiple analysis files found. Select one to import:", 
+                     font=('SF Pro Display', 12)).pack(pady=10, padx=10)
+            
+            # Listbox with files
+            listbox_frame = ttk.Frame(dialog)
+            listbox_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+            
+            scrollbar = ttk.Scrollbar(listbox_frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            listbox = tk.Listbox(listbox_frame, yscrollcommand=scrollbar.set, font=('Courier', 11))
+            listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.config(command=listbox.yview)
+            
+            for f in analysis_files:
+                mtime = datetime.fromtimestamp(os.path.getmtime(f)).strftime('%Y-%m-%d %H:%M')
+                listbox.insert(tk.END, f"{os.path.basename(f)} ({mtime})")
+            
+            listbox.selection_set(0)  # Select first (most recent)
+            
+            selected_file = [None]
+            
+            def on_select():
+                selection = listbox.curselection()
+                if selection:
+                    selected_file[0] = analysis_files[selection[0]]
+                dialog.destroy()
+            
+            def on_cancel():
+                dialog.destroy()
+            
+            button_frame = ttk.Frame(dialog)
+            button_frame.pack(pady=10)
+            ttk.Button(button_frame, text="Import Selected", command=on_select).pack(side=tk.LEFT, padx=5)
+            ttk.Button(button_frame, text="Cancel", command=on_cancel).pack(side=tk.LEFT, padx=5)
+            
+            dialog.wait_window()
+            
+            if selected_file[0] is None:
+                return
+            
+            file_to_import = selected_file[0]
+        else:
+            file_to_import = analysis_files[0]
+        
+        # Confirm import
+        result = messagebox.askyesno(
+            "Import to History",
+            f"Import analysis results to historical database?\n\n"
+            f"File: {os.path.basename(file_to_import)}\n\n"
+            "This will store the analysis results for historical trend analysis. "
+            "Duplicate tickets will be automatically skipped."
+        )
+        
+        if not result:
+            return
+        
+        # Perform import
+        try:
+            self.log_message("📊 Importing analysis results to historical database...")
+            self.log_message(f"   File: {os.path.basename(file_to_import)}")
+            
+            # Get data store instance
+            data_store = get_data_store()
+            
+            # Import CSV
+            stats = data_store.import_csv(file_to_import)
+            
+            # Show results
+            self.log_message("✅ Import completed successfully!")
+            self.log_message(f"   📁 Total rows in file: {stats['total_rows']:,}")
+            self.log_message(f"   ✨ New tickets imported: {stats['imported']:,}")
+            self.log_message(f"   🔄 Duplicates skipped: {stats['duplicates']:,}")
+            
+            if stats['period_start'] and stats['period_end']:
+                self.log_message(f"   📅 Date range: {stats['period_start']} to {stats['period_end']}")
+            
+            # Get overall database stats
+            db_stats = data_store.get_database_stats()
+            self.log_message(f"   💾 Total tickets in history: {db_stats['total_tickets']:,}")
+            self.log_message(f"   📊 Database size: {db_stats['db_size_mb']:.2f} MB")
+            
+            messagebox.showinfo(
+                "Import Successful",
+                f"Analysis results imported to historical database!\n\n"
+                f"New tickets imported: {stats['imported']:,}\n"
+                f"Duplicates skipped: {stats['duplicates']:,}\n"
+                f"Total tickets in history: {db_stats['total_tickets']:,}"
+            )
+            
+        except Exception as e:
+            error_msg = str(e)
+            self.log_message(f"❌ Import failed: {error_msg}")
+            messagebox.showerror("Import Failed", f"Failed to import analysis results:\n\n{error_msg}")
 
 def main():
     """Main function to run the GUI application."""
