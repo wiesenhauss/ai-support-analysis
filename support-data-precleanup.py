@@ -106,6 +106,8 @@ except (ImportError, ModuleNotFoundError):
             
             if verbose:
                 print(f"Cleaned file saved as: {output_file}")
+                import sys
+                sys.stdout.flush()  # Ensure output is captured by subprocess
             
             return output_file, stats
             

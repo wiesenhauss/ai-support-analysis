@@ -127,6 +127,8 @@ def clean_csv_file(file_path: str = None, suffix: str = "-clean",
         
         if verbose:
             print(f"Cleaned file saved as: {output_file}")
+            import sys
+            sys.stdout.flush()  # Ensure output is captured by subprocess
         
         return output_file, stats
         

@@ -699,10 +699,12 @@ def cleanup_dataframe(
     }
     
     if verbose:
+        import sys
         print("\n--- Cleanup Report ---")
         for pattern, count in pattern_counts.items():
             print(f"Rows containing '{pattern}': {count} removed")
         print(f"Total rows removed: {total_removed}")
         print(f"Remaining rows: {remaining_count}")
+        sys.stdout.flush()  # Ensure output is captured by subprocess
     
     return cleaned_df, stats
