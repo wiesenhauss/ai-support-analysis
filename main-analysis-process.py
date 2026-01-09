@@ -60,6 +60,14 @@ import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import gc
+
+# Import shared utilities
+from utils import (
+    normalize_file_path,
+    find_column_by_substring,
+    get_openai_client,
+)
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -130,43 +138,7 @@ except ImportError:
     def load_dotenv():
         pass
 
-def normalize_file_path(file_path):
-	"""Normalize file path to handle spaces and special characters."""
-	if not file_path:
-		return file_path
-	
-	# Remove quotes if they exist
-	file_path = file_path.strip().strip('"').strip("'")
-	
-	# Handle escaped characters (remove backslashes before spaces and special chars)
-	file_path = file_path.replace('\\ ', ' ')
-	file_path = file_path.replace('\\(', '(')
-	file_path = file_path.replace('\\)', ')')
-	file_path = file_path.replace('\\-', '-')
-	
-	# Normalize and expand the path
-	file_path = os.path.expanduser(file_path)
-	file_path = os.path.normpath(file_path)
-	
-	return file_path
-
-def find_column_by_substring(df: pd.DataFrame, column_name: str) -> Optional[str]:
-	"""Find a column in the DataFrame by substring matching, handling spaces and case variations."""
-	# First try exact match
-	if column_name in df.columns:
-		return column_name
-	
-	# Normalize the column name we're looking for
-	normalized_search = column_name.strip().lower()
-	
-	# Try to find a column that contains the substring
-	for col in df.columns:
-		normalized_col = col.strip().lower()
-		if normalized_search in normalized_col or normalized_col in normalized_search:
-			return col
-	
-	# If no match found, return None
-	return None
+# normalize_file_path and find_column_by_substring are now imported from utils
 
 def read_csv_file(file_path: str) -> pd.DataFrame:
 	"""Read the CSV file into a pandas DataFrame and ensure required columns exist."""
@@ -467,15 +439,8 @@ def process_single_ticket(task: TicketTask, api_key: str, use_local: bool, rate_
 
 def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_local: bool = False) -> Optional[dict]:
 	"""Get response from OpenAI API with retry logic and intelligent error handling."""
-	if use_local:
-		# Use local AI server
-		client = openai.OpenAI(
-			api_key="not-needed",
-			base_url="http://localhost:1234/v1"
-		)
-	else:
-		# Use OpenAI API
-		client = openai.OpenAI(api_key=api_key)
+	# Use shared OpenAI client for connection reuse
+	client = get_openai_client(api_key=api_key, use_local=use_local)
 	
 	for attempt in range(max_retries):
 		try:

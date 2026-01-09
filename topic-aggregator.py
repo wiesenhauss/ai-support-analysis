@@ -52,25 +52,12 @@ import os
 import sys
 import argparse
 
-def normalize_file_path(file_path):
-    """Normalize file path to handle spaces and special characters."""
-    if not file_path:
-        return file_path
-    
-    # Remove quotes if they exist
-    file_path = file_path.strip().strip('"').strip("'")
-    
-    # Handle escaped characters (remove backslashes before spaces and special chars)
-    file_path = file_path.replace('\\ ', ' ')
-    file_path = file_path.replace('\\(', '(')
-    file_path = file_path.replace('\\)', ')')
-    file_path = file_path.replace('\\-', '-')
-    
-    # Normalize and expand the path
-    file_path = os.path.expanduser(file_path)
-    file_path = os.path.normpath(file_path)
-    
-    return file_path
+# Import shared utilities
+from utils import (
+    normalize_file_path,
+    find_column_by_substring,
+    get_openai_client,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -83,24 +70,6 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in environment variables")
-
-def find_column_by_substring(df: pd.DataFrame, column_name: str) -> Optional[str]:
-    """Find a column in the DataFrame by substring matching, handling spaces and case variations."""
-    # First try exact match
-    if column_name in df.columns:
-        return column_name
-    
-    # Normalize the column name we're looking for
-    normalized_search = column_name.strip().lower()
-    
-    # Try to find a column that contains the substring
-    for col in df.columns:
-        normalized_col = col.strip().lower()
-        if normalized_search in normalized_col or normalized_col in normalized_search:
-            return col
-    
-    # If no match found, return None
-    return None
 
 def read_csv_data(file_path: str) -> pd.DataFrame:
     """
@@ -210,7 +179,8 @@ def analyze_with_openai(content: str, custom_prompt: str = None) -> str:
     Send content to OpenAI API for topic categorization analysis.
     """
     try:
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        # Use shared OpenAI client for connection reuse
+        client = get_openai_client(api_key=OPENAI_API_KEY)
         
         # Use custom prompt if provided, otherwise use default
         analysis_prompt = custom_prompt if custom_prompt else get_default_prompt()

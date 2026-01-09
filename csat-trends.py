@@ -56,27 +56,15 @@ import logging
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
 import os
-import argparse  # Add this import for command line argument parsing
+import argparse
 
-def normalize_file_path(file_path):
-    """Normalize file path to handle spaces and special characters."""
-    if not file_path:
-        return file_path
-    
-    # Remove quotes if they exist
-    file_path = file_path.strip().strip('"').strip("'")
-    
-    # Handle escaped characters (remove backslashes before spaces and special chars)
-    file_path = file_path.replace('\\ ', ' ')
-    file_path = file_path.replace('\\(', '(')
-    file_path = file_path.replace('\\)', ')')
-    file_path = file_path.replace('\\-', '-')
-    
-    # Normalize and expand the path
-    file_path = os.path.expanduser(file_path)
-    file_path = os.path.normpath(file_path)
-    
-    return file_path
+# Import shared utilities
+from utils import (
+    normalize_file_path,
+    find_column_by_substring,
+    get_openai_client,
+    prepare_records_for_analysis,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -89,24 +77,6 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in environment variables")
-
-def find_column_by_substring(df: pd.DataFrame, column_name: str) -> Optional[str]:
-    """Find a column in the DataFrame by substring matching, handling spaces and case variations."""
-    # First try exact match
-    if column_name in df.columns:
-        return column_name
-    
-    # Normalize the column name we're looking for
-    normalized_search = column_name.strip().lower()
-    
-    # Try to find a column that contains the substring
-    for col in df.columns:
-        normalized_col = col.strip().lower()
-        if normalized_search in normalized_col or normalized_col in normalized_search:
-            return col
-    
-    # If no match found, return None
-    return None
 
 def read_csv_data(file_path: str) -> pd.DataFrame:
     """
@@ -166,8 +136,12 @@ def read_csv_data(file_path: str) -> pd.DataFrame:
 def prepare_content_for_analysis(df: pd.DataFrame, limit: int = None) -> str:
     """
     Prepare the content from DataFrame for analysis.
+    
+    Uses StringIO for efficient string building on large datasets.
     """
-    content_parts = []
+    from io import StringIO
+    
+    buffer = StringIO()
     
     # Get column mapping if available
     column_mapping = df.attrs.get('column_mapping', {})
@@ -185,31 +159,32 @@ def prepare_content_for_analysis(df: pd.DataFrame, limit: int = None) -> str:
     
     # Apply limit if specified, otherwise process all records
     data_to_process = df.head(limit) if limit else df
-    for index, row in data_to_process.iterrows():
-        content_parts.append(f"Record {index + 1}:")
-        content_parts.append(f"Created Date: {get_col_value(row, 'Created Date')}")
-        content_parts.append(f"Ticket URL: {get_col_value(row, 'Zendesk Ticket URL')}")
-        content_parts.append(f"CSAT Rating: {get_col_value(row, 'CSAT Rating')}")
-        content_parts.append(f"CSAT Reason: {get_col_value(row, 'CSAT Reason')}")
-        content_parts.append(f"CSAT Comment: {get_col_value(row, 'CSAT Comment')}")
+    
+    for idx, (_, row) in enumerate(data_to_process.iterrows(), 1):
+        buffer.write(f"Record {idx}:\n")
+        buffer.write(f"Created Date: {get_col_value(row, 'Created Date')}\n")
+        buffer.write(f"Ticket URL: {get_col_value(row, 'Zendesk Ticket URL')}\n")
+        buffer.write(f"CSAT Rating: {get_col_value(row, 'CSAT Rating')}\n")
+        buffer.write(f"CSAT Reason: {get_col_value(row, 'CSAT Reason')}\n")
+        buffer.write(f"CSAT Comment: {get_col_value(row, 'CSAT Comment')}\n")
         
         # Optional columns - only add if they exist
         first_reply_time = get_col_value(row, 'First reply time without AI (hours)')
         if first_reply_time != 'N/A':
-            content_parts.append(f"First Reply Time (hours): {first_reply_time}")
+            buffer.write(f"First Reply Time (hours): {first_reply_time}\n")
         
         total_time = get_col_value(row, 'Total time spent (mins)')
         if total_time != 'N/A':
-            content_parts.append(f"Total Time (mins): {total_time}")
+            buffer.write(f"Total Time (mins): {total_time}\n")
         
-        content_parts.append(f"Sentiment Analysis: {get_col_value(row, 'SENTIMENT_ANALYSIS')}")
-        content_parts.append(f"Issue Resolved: {get_col_value(row, 'ISSUE_RESOLVED')}")
-        content_parts.append(f"Interaction Topics: {get_col_value(row, 'INTERACTION_TOPICS')}")
-        content_parts.append(f"Related to Product: {get_col_value(row, 'RELATED_TO_PRODUCT')}")
-        content_parts.append(f"Related to Service: {get_col_value(row, 'RELATED_TO_SERVICE')}")
-        content_parts.append("-" * 50)
+        buffer.write(f"Sentiment Analysis: {get_col_value(row, 'SENTIMENT_ANALYSIS')}\n")
+        buffer.write(f"Issue Resolved: {get_col_value(row, 'ISSUE_RESOLVED')}\n")
+        buffer.write(f"Interaction Topics: {get_col_value(row, 'INTERACTION_TOPICS')}\n")
+        buffer.write(f"Related to Product: {get_col_value(row, 'RELATED_TO_PRODUCT')}\n")
+        buffer.write(f"Related to Service: {get_col_value(row, 'RELATED_TO_SERVICE')}\n")
+        buffer.write("-" * 50 + "\n")
     
-    return "\n".join(content_parts)
+    return buffer.getvalue()
 
 def get_default_prompt() -> str:
     """
@@ -270,7 +245,8 @@ def analyze_with_openai(content: str, custom_prompt: str = None) -> str:
     Send content to OpenAI API for CSAT trends analysis.
     """
     try:
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        # Use shared OpenAI client for connection reuse
+        client = get_openai_client(api_key=OPENAI_API_KEY)
         
         # Use custom prompt if provided, otherwise use default
         analysis_prompt = custom_prompt if custom_prompt else get_default_prompt()

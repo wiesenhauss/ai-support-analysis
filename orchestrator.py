@@ -49,6 +49,9 @@ import time
 import logging
 import argparse
 
+# Import shared utilities
+from utils import normalize_file_path
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -143,26 +146,6 @@ def run_script(script_name, args):
             for line in e.stderr.strip().split('\n'):
                 logging.error(f"   ⚠️  {line}")
         return False
-
-def normalize_file_path(file_path):
-    """Normalize file path to handle spaces and special characters."""
-    if not file_path:
-        return file_path
-    
-    # Remove quotes if they exist
-    file_path = file_path.strip().strip('"').strip("'")
-    
-    # Handle escaped characters (remove backslashes before spaces and special chars)
-    file_path = file_path.replace('\\ ', ' ')
-    file_path = file_path.replace('\\(', '(')
-    file_path = file_path.replace('\\)', ')')
-    file_path = file_path.replace('\\-', '-')
-    
-    # Normalize and expand the path
-    file_path = os.path.expanduser(file_path)
-    file_path = os.path.normpath(file_path)
-    
-    return file_path
 
 def parse_arguments():
     """Parse command line arguments."""
