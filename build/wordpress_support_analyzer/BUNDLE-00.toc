@@ -1,0 +1,6 @@
+([('AI_Support_Analyzer',
+   '/Users/alejandrorivero/My Drive '
+   '(alexpioli@gmail.com)/Pessoal/Automattic/Projects/AI Squad/CSAT '
+   'bots/Sentiment analysis and summarization/Local scripts - Next generation '
+   'i2/dist/AI_Support_Analyzer',
+   'EXECUTABLE')],)

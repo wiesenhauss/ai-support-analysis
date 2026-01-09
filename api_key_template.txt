@@ -1,0 +1,6 @@
+# WordPress Support Analyzer - API Configuration
+# 
+# Get your OpenAI API key from: https://platform.openai.com/api-keys
+# Your key should start with: sk-proj-...
+
+OPENAI_API_KEY=your_api_key_here

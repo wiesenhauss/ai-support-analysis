@@ -1,0 +1,11 @@
+# WordPress.com Support Analyzer - Environment Configuration
+# 
+# Instructions:
+# 1. Rename this file from "env_template.txt" to ".env"
+# 2. Replace "your_openai_api_key_here" with your actual OpenAI API key
+# 3. Keep the .env file in the same directory as the executable
+#
+# Example:
+# OPENAI_API_KEY=sk-proj-abcdef123456789...
+
+OPENAI_API_KEY=your_openai_api_key_here 
