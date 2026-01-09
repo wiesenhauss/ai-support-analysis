@@ -89,6 +89,11 @@ class TicketAnalysis(Base):
     related_to_service = Column(Boolean, nullable=True)
     ai_feedback = Column(Boolean, nullable=True)
     
+    # Product insights fields (Phase 1)
+    product_area = Column(String(100), nullable=True)  # Domains, Email, Themes, Billing, etc.
+    feature_requests = Column(Text, nullable=True)  # JSON array of feature requests
+    pain_points = Column(Text, nullable=True)  # JSON array of pain points
+    
     # Predictive CSAT (if available)
     predicted_csat = Column(String(20), nullable=True)
     prediction_confidence = Column(Float, nullable=True)
@@ -103,6 +108,7 @@ class TicketAnalysis(Base):
         Index('idx_sentiment', 'sentiment'),
         Index('idx_main_topic', 'main_topic'),
         Index('idx_csat_rating', 'csat_rating'),
+        Index('idx_product_area', 'product_area'),
         UniqueConstraint('ticket_hash', name='uq_ticket_hash'),
     )
     

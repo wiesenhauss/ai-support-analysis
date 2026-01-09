@@ -596,6 +596,9 @@ class AISupportAnalyzerGUI:
         self.history_dashboard_button = ttk.Button(control_frame, text="📈 History Dashboard", command=self.open_history_dashboard)
         self.history_dashboard_button.pack(side=tk.LEFT, padx=(0, 10))
         
+        self.insights_dashboard_button = ttk.Button(control_frame, text="💡 Product Insights", command=self.open_insights_dashboard)
+        self.insights_dashboard_button.pack(side=tk.LEFT, padx=(0, 10))
+        
         self.talk_to_history_button = ttk.Button(control_frame, text="🗣️ Talk to History", command=self.open_talk_to_history)
         self.talk_to_history_button.pack(side=tk.LEFT)
         
@@ -3112,6 +3115,41 @@ Here are the records to analyze:
             error_msg = str(e)
             self.log_message(f"❌ Dashboard error: {error_msg}")
             messagebox.showerror("Error", f"Failed to open History Dashboard:\n\n{error_msg}")
+    
+    def open_insights_dashboard(self):
+        """Open the Product Insights dashboard."""
+        try:
+            from insights_dashboard import open_insights_dashboard, INSIGHTS_AVAILABLE
+            
+            if not INSIGHTS_AVAILABLE:
+                messagebox.showinfo(
+                    "Feature Not Available",
+                    "The Product Insights feature requires additional modules.\n\n"
+                    "Please ensure all insight modules are installed."
+                )
+                return
+            
+            self.log_message("💡 Opening Product Insights Dashboard...")
+            
+            dashboard = open_insights_dashboard(self.root)
+            
+            if dashboard:
+                self.log_message("   Product Insights Dashboard opened successfully")
+                self.log_message("   💡 Use this dashboard to:")
+                self.log_message("      • View prioritized product insights")
+                self.log_message("      • Track feature requests and pain points")
+                self.log_message("      • Export insights to Jira or reports")
+            
+        except ImportError as e:
+            messagebox.showerror(
+                "Module Error",
+                f"Could not import insights dashboard module:\n{str(e)}\n\n"
+                "Please ensure insights_dashboard.py is in the application directory."
+            )
+        except Exception as e:
+            error_msg = str(e)
+            self.log_message(f"❌ Insights Dashboard error: {error_msg}")
+            messagebox.showerror("Error", f"Failed to open Product Insights Dashboard:\n\n{error_msg}")
     
     def open_talk_to_history(self):
         """Open Talk to Data with historical database data."""

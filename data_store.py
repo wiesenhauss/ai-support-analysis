@@ -238,6 +238,10 @@ class DataStore:
                 'ai_feedback': ['AI_FEEDBACK', 'ai_feedback'],
                 'predicted_csat': ['PREDICTED_CSAT', 'predicted_csat'],
                 'prediction_confidence': ['PREDICTION_CONFIDENCE', 'prediction_confidence'],
+                # Product insights fields
+                'product_area': ['PRODUCT_AREA', 'product_area'],
+                'feature_requests': ['FEATURE_REQUESTS', 'feature_requests'],
+                'pain_points': ['PAIN_POINTS', 'pain_points'],
             }
             
             # Resolve column names
@@ -335,6 +339,19 @@ class DataStore:
                             ticket.prediction_confidence = float(val)
                         except (ValueError, TypeError):
                             pass
+                
+                # Product insights fields
+                if resolved_columns['product_area']:
+                    val = row.get(resolved_columns['product_area'])
+                    ticket.product_area = str(val)[:100] if pd.notna(val) else None
+                
+                if resolved_columns['feature_requests']:
+                    val = row.get(resolved_columns['feature_requests'])
+                    ticket.feature_requests = str(val) if pd.notna(val) else None
+                
+                if resolved_columns['pain_points']:
+                    val = row.get(resolved_columns['pain_points'])
+                    ticket.pain_points = str(val) if pd.notna(val) else None
                 
                 session.add(ticket)
                 existing_hashes.add(ticket_hash)  # Prevent duplicates within same import

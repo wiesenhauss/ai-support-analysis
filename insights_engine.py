@@ -478,6 +478,184 @@ class InsightsEngine:
         
         return all_insights
     
+    def compare_periods(
+        self,
+        period1_start: date,
+        period1_end: date,
+        period2_start: date,
+        period2_end: date
+    ) -> Dict[str, Any]:
+        """
+        Compare two time periods across all metrics.
+        
+        Useful for before/after analysis of releases or changes.
+        
+        Args:
+            period1_start: Start of first period (usually "before")
+            period1_end: End of first period
+            period2_start: Start of second period (usually "after")
+            period2_end: End of second period
+            
+        Returns:
+            Dictionary with comparison data for each metric
+        """
+        comparison = {
+            'period1': {'start': str(period1_start), 'end': str(period1_end)},
+            'period2': {'start': str(period2_start), 'end': str(period2_end)},
+            'metrics': {}
+        }
+        
+        # Sentiment comparison
+        sent1 = self.analytics_engine.get_sentiment_distribution(period1_start, period1_end)
+        sent2 = self.analytics_engine.get_sentiment_distribution(period2_start, period2_end)
+        
+        comparison['metrics']['sentiment'] = {
+            'period1': sent1,
+            'period2': sent2,
+            'changes': {
+                'positive': self._calculate_change(sent2['positive_pct'], sent1['positive_pct']),
+                'neutral': self._calculate_change(sent2['neutral_pct'], sent1['neutral_pct']),
+                'negative': self._calculate_change(sent2['negative_pct'], sent1['negative_pct'])
+            }
+        }
+        
+        # Resolution comparison
+        res1 = self.analytics_engine.get_resolution_rate(period1_start, period1_end)
+        res2 = self.analytics_engine.get_resolution_rate(period2_start, period2_end)
+        
+        comparison['metrics']['resolution'] = {
+            'period1': res1,
+            'period2': res2,
+            'change': self._calculate_change(res2['resolution_rate'], res1['resolution_rate'])
+        }
+        
+        # CSAT comparison
+        csat1 = self.analytics_engine.get_csat_distribution(period1_start, period1_end)
+        csat2 = self.analytics_engine.get_csat_distribution(period2_start, period2_end)
+        
+        comparison['metrics']['csat'] = {
+            'period1': csat1,
+            'period2': csat2,
+            'change': self._calculate_change(csat2['satisfaction_rate'], csat1['satisfaction_rate'])
+        }
+        
+        # Topic comparison
+        topics1 = self.analytics_engine.get_topic_distribution(period1_start, period1_end, top_n=10)
+        topics2 = self.analytics_engine.get_topic_distribution(period2_start, period2_end, top_n=10)
+        
+        topics1_dict = dict(zip(topics1['topic'], topics1['percentage'])) if not topics1.empty else {}
+        topics2_dict = dict(zip(topics2['topic'], topics2['percentage'])) if not topics2.empty else {}
+        
+        all_topics = set(topics1_dict.keys()) | set(topics2_dict.keys())
+        topic_changes = {}
+        for topic in all_topics:
+            p1_val = topics1_dict.get(topic, 0)
+            p2_val = topics2_dict.get(topic, 0)
+            topic_changes[topic] = {
+                'period1': p1_val,
+                'period2': p2_val,
+                'change': p2_val - p1_val
+            }
+        
+        # Sort by absolute change
+        sorted_topics = sorted(topic_changes.items(), key=lambda x: abs(x[1]['change']), reverse=True)
+        comparison['metrics']['topics'] = dict(sorted_topics[:10])
+        
+        # Volume comparison
+        comparison['metrics']['volume'] = {
+            'period1': sent1.get('total', 0),
+            'period2': sent2.get('total', 0),
+            'change': self._calculate_change(sent2.get('total', 0), sent1.get('total', 0))
+        }
+        
+        return comparison
+    
+    def detect_emerging_product_insights(
+        self,
+        days: int = 14
+    ) -> List[Dict[str, Any]]:
+        """
+        Detect emerging product insights based on recent ticket patterns.
+        
+        Analyzes product_area and pain_points to identify growing issues.
+        
+        Args:
+            days: Number of days to analyze
+            
+        Returns:
+            List of emerging insights with impact scores
+        """
+        from data_store import get_data_store
+        
+        end_date = date.today()
+        mid_date = end_date - timedelta(days=days//2)
+        start_date = end_date - timedelta(days=days)
+        
+        data_store = get_data_store()
+        
+        # Get tickets from both periods
+        session = data_store._get_session()
+        try:
+            from models import TicketAnalysis
+            from sqlalchemy import func
+            
+            # Product area distribution - recent vs earlier
+            recent_areas = session.query(
+                TicketAnalysis.product_area,
+                func.count(TicketAnalysis.id).label('count')
+            ).filter(
+                TicketAnalysis.created_date >= mid_date,
+                TicketAnalysis.created_date <= end_date,
+                TicketAnalysis.product_area.isnot(None)
+            ).group_by(TicketAnalysis.product_area).all()
+            
+            earlier_areas = session.query(
+                TicketAnalysis.product_area,
+                func.count(TicketAnalysis.id).label('count')
+            ).filter(
+                TicketAnalysis.created_date >= start_date,
+                TicketAnalysis.created_date < mid_date,
+                TicketAnalysis.product_area.isnot(None)
+            ).group_by(TicketAnalysis.product_area).all()
+            
+            recent_dict = {area: count for area, count in recent_areas}
+            earlier_dict = {area: count for area, count in earlier_areas}
+            
+            recent_total = sum(recent_dict.values()) or 1
+            earlier_total = sum(earlier_dict.values()) or 1
+            
+            emerging = []
+            for area in set(recent_dict.keys()) | set(earlier_dict.keys()):
+                recent_pct = (recent_dict.get(area, 0) / recent_total) * 100
+                earlier_pct = (earlier_dict.get(area, 0) / earlier_total) * 100
+                change = recent_pct - earlier_pct
+                
+                if change > 2:  # At least 2% increase
+                    # Get negative sentiment rate for this area recently
+                    neg_count = session.query(func.count(TicketAnalysis.id)).filter(
+                        TicketAnalysis.created_date >= mid_date,
+                        TicketAnalysis.product_area == area,
+                        TicketAnalysis.sentiment == 'Negative'
+                    ).scalar() or 0
+                    
+                    total_area = recent_dict.get(area, 1)
+                    neg_pct = (neg_count / total_area) * 100 if total_area > 0 else 0
+                    
+                    emerging.append({
+                        'product_area': area,
+                        'growth_pct': change,
+                        'ticket_count': recent_dict.get(area, 0),
+                        'negative_pct': neg_pct,
+                        'impact_score': change * 10 + neg_pct * 0.5
+                    })
+            
+            # Sort by impact score
+            emerging.sort(key=lambda x: x['impact_score'], reverse=True)
+            return emerging[:10]
+            
+        finally:
+            session.close()
+    
     def get_insights_summary(self, insights: List[Insight]) -> Dict[str, Any]:
         """
         Generate a summary of insights.

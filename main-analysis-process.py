@@ -129,6 +129,21 @@ ANALYSIS_RESPONSE_SCHEMA = {
                 "main_topic": {
                     "type": "string",
                     "description": "One or more topics from predefined list, comma-separated"
+                },
+                "product_area": {
+                    "type": "string",
+                    "enum": ["Domains", "Email", "Themes", "Plugins", "Billing", "Plans", "Editor", "Media", "SEO", "Security", "Performance", "Migration", "Support", "Account", "AI Features", "Mobile", "Other"],
+                    "description": "Primary product area this ticket relates to"
+                },
+                "feature_requests": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of specific feature requests mentioned by the customer, empty array if none"
+                },
+                "pain_points": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of specific pain points or frustrations expressed by the customer, empty array if none"
                 }
             },
             "required": [
@@ -142,7 +157,10 @@ ANALYSIS_RESPONSE_SCHEMA = {
                 "related_to_product",
                 "related_to_service",
                 "ai_feedback",
-                "main_topic"
+                "main_topic",
+                "product_area",
+                "feature_requests",
+                "pain_points"
             ],
             "additionalProperties": False
         }
@@ -161,7 +179,10 @@ RESPONSE_TO_COLUMN_MAP = {
     "related_to_product": "RELATED_TO_PRODUCT",
     "related_to_service": "RELATED_TO_SERVICE",
     "ai_feedback": "AI_FEEDBACK",
-    "main_topic": "MAIN_TOPIC"
+    "main_topic": "MAIN_TOPIC",
+    "product_area": "PRODUCT_AREA",
+    "feature_requests": "FEATURE_REQUESTS",
+    "pain_points": "PAIN_POINTS"
 }
 
 @dataclass
@@ -459,7 +480,10 @@ def process_single_ticket(task: TicketTask, api_key: str, use_local: bool, rate_
                     'RELATED_TO_PRODUCT': False,  # Native boolean
                     'RELATED_TO_SERVICE': False,  # Native boolean
                     'AI_FEEDBACK': False,  # Native boolean
-                    'MAIN_TOPIC': "Other"
+                    'MAIN_TOPIC': "Other",
+                    'PRODUCT_AREA': "Other",
+                    'FEATURE_REQUESTS': "[]",
+                    'PAIN_POINTS': "[]"
                 }
             )
         
@@ -529,10 +553,19 @@ def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_loc
 			result = {}
 			for json_key, csv_column in RESPONSE_TO_COLUMN_MAP.items():
 				if json_key in json_result:
-					result[csv_column] = json_result[json_key]
+					value = json_result[json_key]
+					# Convert arrays to JSON strings for CSV storage
+					if isinstance(value, list):
+						result[csv_column] = json.dumps(value)
+					else:
+						result[csv_column] = value
 				else:
 					print(f"Warning: Missing key '{json_key}' in response")
-					result[csv_column] = "Analysis incomplete"
+					# Use appropriate default based on expected type
+					if json_key in ['feature_requests', 'pain_points']:
+						result[csv_column] = "[]"  # Empty JSON array
+					else:
+						result[csv_column] = "Analysis incomplete"
 			
 			# Debug: Print structured response summary
 			print(f"\n✓ Structured response received:")
@@ -596,6 +629,9 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 		df['RELATED_TO_PRODUCT'] = None
 		df['RELATED_TO_SERVICE'] = None
 		df['AI_FEEDBACK'] = None
+		df['PRODUCT_AREA'] = None
+		df['FEATURE_REQUESTS'] = None
+		df['PAIN_POINTS'] = None
 		df['MAIN_TOPIC'] = None
 		
 		# Initialize progress tracker and rate limiter
