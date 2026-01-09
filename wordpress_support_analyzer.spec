@@ -4,6 +4,7 @@ import os
 
 # Collect all Python scripts as data files
 script_files = [
+    'utils.py',  # Shared utilities module - MUST be first so other scripts can import it
     'orchestrator.py',
     'main-analysis-process.py',
     'support-data-precleanup.py',
@@ -42,6 +43,9 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=[
+        # Local modules
+        'utils',  # Shared utilities module
+        
         # GUI and system modules
         'tkinter',
         'tkinter.ttk',
