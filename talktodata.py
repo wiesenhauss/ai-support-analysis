@@ -168,11 +168,23 @@ COLUMN_METADATA = {
 }
 
 class TalkToDataWindow:
-    def __init__(self, parent, csv_file_path, api_key):
+    def __init__(self, parent, csv_file_path, api_key, dataframe=None, data_source_name=None):
+        """
+        Initialize Talk to Data window.
+        
+        Args:
+            parent: Parent Tkinter window
+            csv_file_path: Path to CSV file (can be None if dataframe is provided)
+            api_key: OpenAI API key
+            dataframe: Optional pre-loaded DataFrame (for historical data mode)
+            data_source_name: Optional name for the data source (used when dataframe is provided)
+        """
         self.parent = parent
         self.csv_file_path = csv_file_path
         self.api_key = api_key
-        self.df = None
+        self.df = dataframe  # Can be pre-loaded
+        self.data_source_name = data_source_name  # For display purposes
+        self.is_historical_mode = dataframe is not None
         self.selected_columns = []
         self.analysis_result = ""
         
@@ -197,8 +209,8 @@ class TalkToDataWindow:
         self.current_chunk = 0
         self.total_chunks = 0
         
-        # Load and validate CSV
-        if not self.load_and_validate_csv():
+        # Load and validate data (CSV or pre-loaded DataFrame)
+        if not self.load_and_validate_data():
             return
             
         self.setup_window()
@@ -207,10 +219,17 @@ class TalkToDataWindow:
         # Initialize token counting (using estimation method)
         self.log_message("📊 Token counting initialized (using estimation method)")
         
-    def load_and_validate_csv(self):
-        """Load CSV and validate it can be processed"""
+    def load_and_validate_data(self):
+        """Load and validate data from CSV or pre-loaded DataFrame"""
         try:
-            # Load CSV
+            # If DataFrame was provided, use it directly
+            if self.df is not None:
+                if self.df.empty:
+                    messagebox.showerror("Error", "The provided data is empty.")
+                    return False
+                return True
+            
+            # Otherwise load from CSV
             self.df = pd.read_csv(self.csv_file_path)
             
             if self.df.empty:
@@ -250,7 +269,11 @@ class TalkToDataWindow:
         title_label.grid(row=0, column=0, pady=(10, 5), sticky="ew")
         
         # Dataset info
-        info_text = f"Dataset: {os.path.basename(self.csv_file_path)} ({len(self.df):,} rows)"
+        if self.is_historical_mode:
+            source_name = self.data_source_name or "Historical Database"
+            info_text = f"📊 Data Source: {source_name} ({len(self.df):,} tickets)"
+        else:
+            info_text = f"Dataset: {os.path.basename(self.csv_file_path)} ({len(self.df):,} rows)"
         info_label = tk.Label(self.window, text=info_text, font=("Arial", 10))
         info_label.grid(row=1, column=0, pady=(0, 10), sticky="ew")
         
@@ -2445,6 +2468,87 @@ Format as a focused, conversational response - not a full report. Be specific bu
         # Clear question text for next input
         self.question_text.delete(1.0, tk.END)
         self.question_text.focus()
+
+
+def open_talk_to_history(parent, api_key, start_date=None, end_date=None):
+    """
+    Open Talk to Data window with historical database data.
+    
+    This function loads data from the historical database and opens
+    the Talk to Data interface for natural language querying.
+    
+    Args:
+        parent: Parent Tkinter window
+        api_key: OpenAI API key
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+        
+    Returns:
+        TalkToDataWindow instance or None if failed
+    """
+    try:
+        from data_store import get_data_store, DATA_STORE_AVAILABLE
+        
+        if not DATA_STORE_AVAILABLE:
+            messagebox.showerror(
+                "Feature Unavailable",
+                "Historical data store is not available.\n\n"
+                "Please ensure data_store.py is in the application directory."
+            )
+            return None
+        
+        data_store = get_data_store()
+        
+        # Get database stats
+        stats = data_store.get_database_stats()
+        
+        if stats['total_tickets'] == 0:
+            messagebox.showinfo(
+                "No Historical Data",
+                "No historical data found in the database.\n\n"
+                "Please import some analysis results first using 'Import to History'."
+            )
+            return None
+        
+        # Load tickets from database
+        df = data_store.get_tickets_dataframe(start_date=start_date, end_date=end_date)
+        
+        if df.empty:
+            messagebox.showinfo(
+                "No Data in Range",
+                "No tickets found in the specified date range."
+            )
+            return None
+        
+        # Create data source name
+        date_range = data_store.get_date_range()
+        if date_range[0] and date_range[1]:
+            source_name = f"Historical Database ({date_range[0]} to {date_range[1]})"
+        else:
+            source_name = f"Historical Database ({stats['total_tickets']:,} tickets)"
+        
+        # Open Talk to Data with historical data
+        return TalkToDataWindow(
+            parent=parent,
+            csv_file_path=None,
+            api_key=api_key,
+            dataframe=df,
+            data_source_name=source_name
+        )
+        
+    except ImportError as e:
+        messagebox.showerror(
+            "Module Error",
+            f"Could not import data store module:\n{str(e)}"
+        )
+        return None
+    except Exception as e:
+        messagebox.showerror(
+            "Error",
+            f"Failed to load historical data:\n{str(e)}"
+        )
+        return None
+
 
 def main():
     """Main function for testing"""

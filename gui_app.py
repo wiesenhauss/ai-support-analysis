@@ -594,7 +594,10 @@ class AISupportAnalyzerGUI:
         self.import_history_button.pack(side=tk.LEFT, padx=(0, 10))
         
         self.history_dashboard_button = ttk.Button(control_frame, text="📈 History Dashboard", command=self.open_history_dashboard)
-        self.history_dashboard_button.pack(side=tk.LEFT)
+        self.history_dashboard_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.talk_to_history_button = ttk.Button(control_frame, text="🗣️ Talk to History", command=self.open_talk_to_history)
+        self.talk_to_history_button.pack(side=tk.LEFT)
         
         # Progress Section
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding="10")
@@ -3109,6 +3112,39 @@ Here are the records to analyze:
             error_msg = str(e)
             self.log_message(f"❌ Dashboard error: {error_msg}")
             messagebox.showerror("Error", f"Failed to open History Dashboard:\n\n{error_msg}")
+    
+    def open_talk_to_history(self):
+        """Open Talk to Data with historical database data."""
+        # Validate API key
+        api_key = self.api_key_var.get().strip()
+        if not api_key:
+            messagebox.showerror("Error", "Please enter your OpenAI API key first.")
+            return
+        
+        try:
+            from talktodata import open_talk_to_history
+            
+            self.log_message("🗣️ Opening Talk to History...")
+            
+            window = open_talk_to_history(self.root, api_key)
+            
+            if window:
+                self.log_message("   Talk to History opened successfully")
+                self.log_message("   💡 Ask questions about your historical support data:")
+                self.log_message("      • 'What were the top issues last month?'")
+                self.log_message("      • 'How has sentiment changed over time?'")
+                self.log_message("      • 'Compare resolution rates this quarter vs last'")
+            
+        except ImportError as e:
+            messagebox.showerror(
+                "Module Error",
+                f"Could not import talk to history module:\n{str(e)}\n\n"
+                "Please ensure talktodata.py is in the application directory."
+            )
+        except Exception as e:
+            error_msg = str(e)
+            self.log_message(f"❌ Talk to History error: {error_msg}")
+            messagebox.showerror("Error", f"Failed to open Talk to History:\n\n{error_msg}")
 
 def main():
     """Main function to run the GUI application."""
