@@ -30,12 +30,17 @@ import matplotlib.dates as mdates
 
 # Try to import analytics modules
 try:
-    from data_store import get_data_store, DataStore, DATA_STORE_AVAILABLE
+    from data_store import get_data_store, DataStore
+    DATA_STORE_AVAILABLE = True
+except ImportError:
+    DATA_STORE_AVAILABLE = False
+
+try:
     from analytics_engine import get_analytics_engine, AnalyticsEngine
+    from insights_engine import get_insights_engine, InsightsEngine, InsightSeverity
     ANALYTICS_AVAILABLE = True
 except ImportError:
     ANALYTICS_AVAILABLE = False
-    DATA_STORE_AVAILABLE = False
 
 
 class HistoryDashboard(ttk.Frame):
@@ -66,12 +71,14 @@ class HistoryDashboard(ttk.Frame):
         
         self.data_store = None
         self.analytics_engine = None
+        self.insights_engine = None
         
         # Initialize data connections
         if ANALYTICS_AVAILABLE:
             try:
                 self.data_store = get_data_store()
                 self.analytics_engine = get_analytics_engine()
+                self.insights_engine = get_insights_engine()
             except Exception as e:
                 print(f"Failed to initialize analytics: {e}")
         
@@ -179,9 +186,49 @@ class HistoryDashboard(ttk.Frame):
         toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         toolbar.update()
         
+        # === Insights Panel ===
+        insights_frame = ttk.LabelFrame(self, text="📊 Automated Insights (Week-over-Week)", padding="5")
+        insights_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+        insights_frame.columnconfigure(0, weight=1)
+        
+        # Insights header with refresh button
+        insights_header = ttk.Frame(insights_frame)
+        insights_header.pack(fill=tk.X, pady=(0, 5))
+        
+        self.insights_summary_label = ttk.Label(
+            insights_header, 
+            text="Loading insights...",
+            font=('SF Pro Display', 10)
+        )
+        self.insights_summary_label.pack(side=tk.LEFT)
+        
+        ttk.Button(
+            insights_header,
+            text="🔄 Refresh Insights",
+            command=self._refresh_insights
+        ).pack(side=tk.RIGHT)
+        
+        # Insights list
+        self.insights_text = tk.Text(
+            insights_frame,
+            height=6,
+            wrap=tk.WORD,
+            font=('SF Pro Display', 10),
+            state=tk.DISABLED,
+            background='#FAFAFA'
+        )
+        self.insights_text.pack(fill=tk.X, expand=False)
+        
+        # Configure text tags for styling
+        self.insights_text.tag_configure('critical', foreground='#D32F2F', font=('SF Pro Display', 10, 'bold'))
+        self.insights_text.tag_configure('warning', foreground='#F57C00', font=('SF Pro Display', 10, 'bold'))
+        self.insights_text.tag_configure('info', foreground='#1976D2')
+        self.insights_text.tag_configure('positive', foreground='#388E3C')
+        self.insights_text.tag_configure('title', font=('SF Pro Display', 10, 'bold'))
+        
         # === Batches List ===
         batches_frame = ttk.LabelFrame(self, text="Import History", padding="5")
-        batches_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+        batches_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
         
         # Treeview for batches
         columns = ('date', 'file', 'tickets', 'period')
@@ -238,8 +285,101 @@ class HistoryDashboard(ttk.Frame):
         elif chart_type == "csat":
             self._draw_csat_chart(start_date, end_date)
         
+        # Update insights
+        self._refresh_insights()
+        
         # Update batches list
         self._update_batches_list()
+    
+    def _refresh_insights(self):
+        """Refresh the automated insights panel."""
+        if not self.insights_engine:
+            self._display_insights_message("Insights engine not available")
+            return
+        
+        try:
+            # Generate weekly insights
+            insights = self.insights_engine.generate_weekly_insights()
+            summary = self.insights_engine.get_insights_summary(insights)
+            
+            # Update summary label
+            if summary['total'] == 0:
+                self.insights_summary_label.config(
+                    text="No significant changes detected this week"
+                )
+            else:
+                parts = []
+                if summary['critical'] > 0:
+                    parts.append(f"🔴 {summary['critical']} critical")
+                if summary['warning'] > 0:
+                    parts.append(f"🟡 {summary['warning']} warnings")
+                if summary['info'] > 0:
+                    parts.append(f"🔵 {summary['info']} info")
+                
+                self.insights_summary_label.config(
+                    text=f"Found {summary['total']} insights: " + ", ".join(parts)
+                )
+            
+            # Display insights
+            self._display_insights(insights)
+            
+        except Exception as e:
+            print(f"Error refreshing insights: {e}")
+            self._display_insights_message(f"Error loading insights: {str(e)}")
+    
+    def _display_insights(self, insights):
+        """Display insights in the text widget."""
+        self.insights_text.config(state=tk.NORMAL)
+        self.insights_text.delete(1.0, tk.END)
+        
+        if not insights:
+            self.insights_text.insert(tk.END, "✅ No significant changes detected.\n\n")
+            self.insights_text.insert(tk.END, "Your support metrics are stable compared to last week.")
+            self.insights_text.config(state=tk.DISABLED)
+            return
+        
+        for i, insight in enumerate(insights[:5]):  # Show top 5 insights
+            # Severity indicator
+            if insight.severity == InsightSeverity.CRITICAL:
+                icon = "🔴"
+                tag = 'critical'
+            elif insight.severity == InsightSeverity.WARNING:
+                icon = "🟡"
+                tag = 'warning'
+            else:
+                icon = "🔵"
+                tag = 'info'
+            
+            # Title
+            self.insights_text.insert(tk.END, f"{icon} ", tag)
+            self.insights_text.insert(tk.END, f"{insight.title}\n", 'title')
+            
+            # Description
+            self.insights_text.insert(tk.END, f"   {insight.description}\n")
+            
+            # Change indicator
+            change_str = f"   Change: {insight.change_percent:+.1f}%"
+            if insight.change_percent > 0 and 'Positive' in insight.title:
+                self.insights_text.insert(tk.END, change_str + "\n", 'positive')
+            elif insight.change_percent < 0 and 'Negative' in insight.title:
+                self.insights_text.insert(tk.END, change_str + "\n", 'positive')
+            else:
+                self.insights_text.insert(tk.END, change_str + "\n")
+            
+            if i < len(insights) - 1:
+                self.insights_text.insert(tk.END, "\n")
+        
+        if len(insights) > 5:
+            self.insights_text.insert(tk.END, f"\n... and {len(insights) - 5} more insights")
+        
+        self.insights_text.config(state=tk.DISABLED)
+    
+    def _display_insights_message(self, message):
+        """Display a message in the insights panel."""
+        self.insights_text.config(state=tk.NORMAL)
+        self.insights_text.delete(1.0, tk.END)
+        self.insights_text.insert(tk.END, message)
+        self.insights_text.config(state=tk.DISABLED)
     
     def _update_stats(self, start_date, end_date):
         """Update summary statistics."""
