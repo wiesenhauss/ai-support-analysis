@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 Database Models for AI Support Analyzer Historical Analytics
 

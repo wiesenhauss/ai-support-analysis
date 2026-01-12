@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 Insights Engine for AI Support Analyzer Historical Analytics
 

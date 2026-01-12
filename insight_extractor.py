@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 Insight Extractor - AI-Powered Product Insight Extraction
 

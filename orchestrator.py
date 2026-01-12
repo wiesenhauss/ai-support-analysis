@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 WordPress.com Support Analysis Pipeline Orchestrator
 by @wiesenhauss
