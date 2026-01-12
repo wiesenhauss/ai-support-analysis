@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 WordPress.com Support Topic Aggregation and Categorization Tool
 by @wiesenhauss

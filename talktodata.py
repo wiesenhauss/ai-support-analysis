@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Talk to Data - AI-Powered CSV Analysis
 Interactive data analysis using AI for Automattic Inc support data
