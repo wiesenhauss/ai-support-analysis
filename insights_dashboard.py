@@ -101,6 +101,11 @@ class InsightsDashboard(ttk.Frame):
         self.filter_status = tk.StringVar(value="All")
         self.sort_by = tk.StringVar(value="impact_score")
         
+        # Date filter variables
+        self.date_preset = tk.StringVar(value="All Time")
+        self.custom_start_date = tk.StringVar(value="")
+        self.custom_end_date = tk.StringVar(value="")
+        
         # Setup UI
         self._setup_ui()
         
@@ -130,7 +135,7 @@ class InsightsDashboard(ttk.Frame):
         control_frame = ttk.LabelFrame(self, text="Filters & Actions", padding="10")
         control_frame.grid(row=0, column=0, sticky='ew', padx=5, pady=5)
         
-        # Row 1: Filters
+        # Row 1: Type, Area, Status, Sort filters
         filter_frame = ttk.Frame(control_frame)
         filter_frame.pack(fill=tk.X, pady=(0, 10))
         
@@ -160,9 +165,47 @@ class InsightsDashboard(ttk.Frame):
                                         *[s[1] for s in sort_options], command=self._on_filter_change)
         self.sort_menu.pack(side=tk.LEFT, padx=(0, 15))
         
-        # Row 2: Actions
+        # Row 2: Date Range Filters
+        date_frame = ttk.Frame(control_frame)
+        date_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Date preset dropdown
+        ttk.Label(date_frame, text="Date Range:").pack(side=tk.LEFT, padx=(0, 5))
+        date_presets = ["All Time", "Last 30 Days", "Last 60 Days", "Last 90 Days", 
+                        "Last 180 Days", "Last 365 Days", "Custom Range"]
+        self.date_preset_menu = ttk.OptionMenu(date_frame, self.date_preset, self.date_preset.get(),
+                                               *date_presets, command=self._on_date_preset_change)
+        self.date_preset_menu.pack(side=tk.LEFT, padx=(0, 15))
+        
+        # Custom date range inputs (initially hidden)
+        self.custom_date_frame = ttk.Frame(date_frame)
+        
+        ttk.Label(self.custom_date_frame, text="From:").pack(side=tk.LEFT, padx=(0, 5))
+        self.start_date_entry = ttk.Entry(self.custom_date_frame, textvariable=self.custom_start_date, 
+                                          width=12)
+        self.start_date_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(self.custom_date_frame, text="📅", width=3,
+                   command=lambda: self._show_date_picker('start')).pack(side=tk.LEFT, padx=(0, 10))
+        
+        ttk.Label(self.custom_date_frame, text="To:").pack(side=tk.LEFT, padx=(0, 5))
+        self.end_date_entry = ttk.Entry(self.custom_date_frame, textvariable=self.custom_end_date,
+                                        width=12)
+        self.end_date_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(self.custom_date_frame, text="📅", width=3,
+                   command=lambda: self._show_date_picker('end')).pack(side=tk.LEFT, padx=(0, 10))
+        
+        ttk.Button(self.custom_date_frame, text="Apply", 
+                   command=self._on_filter_change).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Hint label for date format
+        self.date_hint_label = ttk.Label(date_frame, text="(YYYY-MM-DD)", 
+                                         font=('TkDefaultFont', 9, 'italic'), foreground='gray')
+        
+        # Row 3: Actions
         action_frame = ttk.Frame(control_frame)
-        action_frame.pack(fill=tk.X)
+        action_frame.pack(fill=tk.X, pady=(5, 0))
         
         ttk.Button(action_frame, text="🔄 Refresh", 
                    command=self.refresh_insights).pack(side=tk.LEFT, padx=(0, 10))
@@ -340,6 +383,190 @@ class InsightsDashboard(ttk.Frame):
         """Handle filter changes."""
         self.refresh_insights()
     
+    def _on_date_preset_change(self, *args):
+        """Handle date preset dropdown changes."""
+        preset = self.date_preset.get()
+        
+        if preset == "Custom Range":
+            # Show custom date inputs
+            self.custom_date_frame.pack(side=tk.LEFT, padx=(0, 10))
+            self.date_hint_label.pack(side=tk.LEFT)
+            # Set default dates if empty
+            if not self.custom_start_date.get():
+                default_start = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+                self.custom_start_date.set(default_start)
+            if not self.custom_end_date.get():
+                self.custom_end_date.set(date.today().strftime('%Y-%m-%d'))
+        else:
+            # Hide custom date inputs
+            self.custom_date_frame.pack_forget()
+            self.date_hint_label.pack_forget()
+            # Clear custom dates
+            self.custom_start_date.set("")
+            self.custom_end_date.set("")
+            # Refresh with new preset
+            self.refresh_insights()
+    
+    def _show_date_picker(self, which: str):
+        """Show a date picker dialog."""
+        # Create a simple date picker dialog
+        picker = tk.Toplevel(self)
+        picker.title(f"Select {'Start' if which == 'start' else 'End'} Date")
+        picker.geometry("280x320")
+        picker.transient(self)
+        picker.grab_set()
+        
+        # Center on parent
+        picker.update_idletasks()
+        x = self.winfo_rootx() + 100
+        y = self.winfo_rooty() + 50
+        picker.geometry(f"+{x}+{y}")
+        
+        # Current date or selected date
+        current_var = self.custom_start_date if which == 'start' else self.custom_end_date
+        try:
+            if current_var.get():
+                selected = datetime.strptime(current_var.get(), '%Y-%m-%d').date()
+            else:
+                selected = date.today()
+        except ValueError:
+            selected = date.today()
+        
+        # Variables for the picker
+        year_var = tk.IntVar(value=selected.year)
+        month_var = tk.IntVar(value=selected.month)
+        
+        # Year and Month selectors
+        nav_frame = ttk.Frame(picker)
+        nav_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(nav_frame, text="◀", width=3,
+                   command=lambda: self._change_month(year_var, month_var, -1, day_frame)).pack(side=tk.LEFT)
+        
+        month_label = ttk.Label(nav_frame, text="", font=('TkDefaultFont', 11, 'bold'))
+        month_label.pack(side=tk.LEFT, expand=True)
+        
+        ttk.Button(nav_frame, text="▶", width=3,
+                   command=lambda: self._change_month(year_var, month_var, 1, day_frame)).pack(side=tk.RIGHT)
+        
+        # Day grid
+        day_frame = ttk.Frame(picker)
+        day_frame.pack(fill=tk.BOTH, expand=True, padx=10)
+        
+        def update_calendar():
+            # Clear current days
+            for widget in day_frame.winfo_children():
+                widget.destroy()
+            
+            year = year_var.get()
+            month = month_var.get()
+            
+            month_label.config(text=f"{datetime(year, month, 1).strftime('%B %Y')}")
+            
+            # Day headers
+            for i, day_name in enumerate(['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']):
+                ttk.Label(day_frame, text=day_name, width=4, anchor='center').grid(row=0, column=i, pady=2)
+            
+            # Get first day of month and number of days
+            import calendar
+            first_weekday = calendar.monthrange(year, month)[0]
+            num_days = calendar.monthrange(year, month)[1]
+            
+            # Fill in days
+            row = 1
+            col = first_weekday
+            for day in range(1, num_days + 1):
+                btn = ttk.Button(day_frame, text=str(day), width=4,
+                                command=lambda d=day: select_date(year, month, d))
+                btn.grid(row=row, column=col, pady=1, padx=1)
+                col += 1
+                if col > 6:
+                    col = 0
+                    row += 1
+        
+        def select_date(y, m, d):
+            selected_date = date(y, m, d)
+            current_var.set(selected_date.strftime('%Y-%m-%d'))
+            picker.destroy()
+        
+        def _change_month_inner(delta):
+            m = month_var.get() + delta
+            y = year_var.get()
+            if m < 1:
+                m = 12
+                y -= 1
+            elif m > 12:
+                m = 1
+                y += 1
+            month_var.set(m)
+            year_var.set(y)
+            update_calendar()
+        
+        # Re-bind navigation buttons
+        for widget in nav_frame.winfo_children():
+            if isinstance(widget, ttk.Button):
+                if widget.cget('text') == '◀':
+                    widget.config(command=lambda: _change_month_inner(-1))
+                elif widget.cget('text') == '▶':
+                    widget.config(command=lambda: _change_month_inner(1))
+        
+        # Quick select buttons
+        quick_frame = ttk.Frame(picker)
+        quick_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(quick_frame, text="Today", 
+                   command=lambda: select_date(date.today().year, date.today().month, date.today().day)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(quick_frame, text="Cancel", 
+                   command=picker.destroy).pack(side=tk.RIGHT, padx=2)
+        
+        update_calendar()
+    
+    def _change_month(self, year_var, month_var, delta, day_frame):
+        """Helper to change month - placeholder, actual logic in picker."""
+        pass
+    
+    def _get_date_filter_range(self):
+        """Get the date range based on current filter settings."""
+        preset = self.date_preset.get()
+        
+        if preset == "All Time":
+            return None, None
+        
+        elif preset == "Custom Range":
+            start_str = self.custom_start_date.get().strip()
+            end_str = self.custom_end_date.get().strip()
+            
+            start_date = None
+            end_date = None
+            
+            if start_str:
+                try:
+                    start_date = datetime.strptime(start_str, '%Y-%m-%d').date()
+                except ValueError:
+                    pass
+            
+            if end_str:
+                try:
+                    end_date = datetime.strptime(end_str, '%Y-%m-%d').date()
+                except ValueError:
+                    pass
+            
+            return start_date, end_date
+        
+        else:
+            # Parse preset like "Last 30 Days"
+            days_map = {
+                "Last 30 Days": 30,
+                "Last 60 Days": 60,
+                "Last 90 Days": 90,
+                "Last 180 Days": 180,
+                "Last 365 Days": 365
+            }
+            days = days_map.get(preset, 30)
+            end_date = date.today()
+            start_date = end_date - timedelta(days=days)
+            return start_date, end_date
+    
     def _on_insight_select(self, event):
         """Handle insight selection."""
         selection = self.insights_tree.selection()
@@ -364,13 +591,18 @@ class InsightsDashboard(ttk.Frame):
         product_area = None if self.filter_area.get() == "All" else self.filter_area.get()
         status = None if self.filter_status.get() == "All" else self.filter_status.get()
         
+        # Get date range
+        start_date, end_date = self._get_date_filter_range()
+        
         try:
             insights = self.insights_store.get_insights(
                 insight_type=insight_type,
                 product_area=product_area,
                 status=status,
                 order_by=self.sort_by.get(),
-                limit=100
+                limit=100,
+                start_date=start_date,
+                end_date=end_date
             )
             
             self.insights_list = insights
@@ -393,9 +625,22 @@ class InsightsDashboard(ttk.Frame):
                     tags=(str(insight.id),)
                 )
             
-            # Update stats
+            # Update stats with date range info
             summary = self.insights_store.get_insights_summary()
-            self.stats_label.config(text=f"Total: {summary['total_insights']} insights")
+            stats_text = f"Showing: {len(insights)} insights"
+            
+            # Add date range info
+            preset = self.date_preset.get()
+            if preset != "All Time":
+                if preset == "Custom Range":
+                    start_str = self.custom_start_date.get() or "?"
+                    end_str = self.custom_end_date.get() or "?"
+                    stats_text += f" | {start_str} to {end_str}"
+                else:
+                    stats_text += f" | {preset}"
+            
+            stats_text += f" | Total in DB: {summary['total_insights']}"
+            self.stats_label.config(text=stats_text)
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load insights: {e}")
@@ -543,27 +788,76 @@ class InsightsDashboard(ttk.Frame):
             messagebox.showerror("Error", "Insight extractor not available")
             return
         
-        # Ask for date range
-        days = 30  # Default to 30 days
+        # Create dialog for date range selection
+        dialog = tk.Toplevel(self)
+        dialog.title("Extract Insights")
+        dialog.geometry("350x200")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Center on parent
+        dialog.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - 350) // 2
+        y = self.winfo_rooty() + 50
+        dialog.geometry(f"+{x}+{y}")
+        
+        ttk.Label(dialog, text="Select date range for extraction:", 
+                  font=('TkDefaultFont', 11)).pack(pady=(15, 10))
+        
+        # Preset selection
+        preset_var = tk.StringVar(value="Last 30 Days")
+        presets_frame = ttk.Frame(dialog)
+        presets_frame.pack(fill=tk.X, padx=20, pady=5)
+        
+        ttk.Label(presets_frame, text="Range:").pack(side=tk.LEFT, padx=(0, 10))
+        preset_options = ["Last 30 Days", "Last 60 Days", "Last 90 Days", "Last 180 Days", "Last 365 Days"]
+        ttk.OptionMenu(presets_frame, preset_var, preset_var.get(), *preset_options).pack(side=tk.LEFT)
+        
+        # Use current dashboard filter option
+        use_current_var = tk.BooleanVar(value=False)
+        if self.date_preset.get() != "All Time":
+            ttk.Checkbutton(dialog, text="Use current dashboard date filter", 
+                           variable=use_current_var).pack(pady=10)
         
         def run_extraction():
-            try:
+            dialog.destroy()
+            
+            # Determine date range
+            if use_current_var.get() and self.date_preset.get() != "All Time":
+                start_date, end_date = self._get_date_filter_range()
+            else:
+                days_map = {
+                    "Last 30 Days": 30,
+                    "Last 60 Days": 60,
+                    "Last 90 Days": 90,
+                    "Last 120 Days": 120,
+                    "Last 365 Days": 365
+                }
+                days = days_map.get(preset_var.get(), 30)
                 end_date = date.today()
                 start_date = end_date - timedelta(days=days)
-                
-                result = self.extractor.extract_insights_from_batch(
-                    start_date=start_date,
-                    end_date=end_date
-                )
-                
-                self.data_queue.put(('extraction_complete', result))
-            except Exception as e:
-                self.data_queue.put(('extraction_error', str(e)))
+            
+            def do_extraction():
+                try:
+                    result = self.extractor.extract_insights_from_batch(
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                    self.data_queue.put(('extraction_complete', result))
+                except Exception as e:
+                    self.data_queue.put(('extraction_error', str(e)))
+            
+            # Show progress message
+            date_range_str = f"{start_date} to {end_date}" if start_date and end_date else "selected range"
+            messagebox.showinfo("Info", f"Extracting insights from {date_range_str}...\nThis may take a moment.")
+            threading.Thread(target=do_extraction, daemon=True).start()
+            self.after(500, self._check_extraction_result)
         
-        # Run in background
-        messagebox.showinfo("Info", f"Extracting insights from the last {days} days...\nThis may take a moment.")
-        threading.Thread(target=run_extraction, daemon=True).start()
-        self.after(500, self._check_extraction_result)
+        # Buttons
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=20)
+        ttk.Button(btn_frame, text="Extract", command=run_extraction).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
     
     def _check_extraction_result(self):
         """Check for extraction result."""
