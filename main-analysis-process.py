@@ -638,10 +638,11 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 		progress_tracker = ThreadSafeProgressTracker(total_rows)
 		
 		# Set rate limit based on API type and thread count
+		# With 50 threads, allow high throughput - retry logic handles rate limits
 		if use_local:
-			rate_limit = 50.0  # Local server can handle more requests
+			rate_limit = 200.0  # Local server can handle more requests
 		else:
-			rate_limit = 15.0  # Conservative for OpenAI API with multiple threads
+			rate_limit = 100.0  # Higher rate for OpenAI API with 50 threads
 		
 		rate_limiter = RateLimiter(rate_limit)
 		
@@ -780,7 +781,7 @@ def main():
 	parser = argparse.ArgumentParser(description='Process CSAT survey data and support ticket interactions.')
 	parser.add_argument('-file', '--input-file', type=str, help='Path to the input CSV file')
 	parser.add_argument('--local', action='store_true', help='Use local AI server instead of OpenAI API')
-	parser.add_argument('--threads', type=int, default=5, help='Number of concurrent processing threads (default: 5)')
+	parser.add_argument('--threads', type=int, default=50, help='Number of concurrent processing threads (default: 50)')
 	args = parser.parse_args()
 	
 	# Get input file path from command line argument or user input
