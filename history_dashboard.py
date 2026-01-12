@@ -85,7 +85,11 @@ class HistoryDashboard(ttk.Frame):
         # Chart variables - default to topics which works without dates
         self.current_chart = tk.StringVar(value="topics")
         self.granularity = tk.StringVar(value="week")
-        self.date_range = tk.StringVar(value="All")  # Default to All to show data
+        self.date_range = tk.StringVar(value="All Time")  # Default to All to show data
+        
+        # Custom date range variables
+        self.custom_start_date = tk.StringVar(value="")
+        self.custom_end_date = tk.StringVar(value="")
         
         # Setup UI
         self._setup_ui()
@@ -103,48 +107,78 @@ class HistoryDashboard(ttk.Frame):
         control_frame = ttk.LabelFrame(self, text="Dashboard Controls", padding="10")
         control_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
         
-        # Date range selector
-        ttk.Label(control_frame, text="Date Range:").pack(side=tk.LEFT, padx=(0, 5))
-        range_combo = ttk.Combobox(
-            control_frame, 
-            textvariable=self.date_range,
-            values=["30", "60", "90", "180", "365", "All"],
-            width=10,
-            state="readonly"
+        # Row 1: Date Range, Granularity, Chart Type
+        row1_frame = ttk.Frame(control_frame)
+        row1_frame.pack(fill=tk.X, pady=(0, 8))
+        
+        # Date range preset dropdown
+        ttk.Label(row1_frame, text="Date Range:").pack(side=tk.LEFT, padx=(0, 5))
+        date_presets = ["All Time", "Last 30 Days", "Last 60 Days", "Last 90 Days", 
+                        "Last 180 Days", "Last 365 Days", "Custom Range"]
+        self.date_preset_menu = ttk.OptionMenu(
+            row1_frame, self.date_range, self.date_range.get(),
+            *date_presets, command=self._on_date_preset_change
         )
-        range_combo.pack(side=tk.LEFT, padx=(0, 20))
-        range_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_dashboard())
+        self.date_preset_menu.pack(side=tk.LEFT, padx=(0, 15))
         
         # Granularity selector
-        ttk.Label(control_frame, text="Granularity:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(row1_frame, text="Granularity:").pack(side=tk.LEFT, padx=(0, 5))
         granularity_combo = ttk.Combobox(
-            control_frame,
+            row1_frame,
             textvariable=self.granularity,
             values=["day", "week", "month"],
             width=10,
             state="readonly"
         )
-        granularity_combo.pack(side=tk.LEFT, padx=(0, 20))
+        granularity_combo.pack(side=tk.LEFT, padx=(0, 15))
         granularity_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_dashboard())
         
         # Chart type selector
-        ttk.Label(control_frame, text="Chart:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(row1_frame, text="Chart:").pack(side=tk.LEFT, padx=(0, 5))
         chart_combo = ttk.Combobox(
-            control_frame,
+            row1_frame,
             textvariable=self.current_chart,
             values=["sentiment", "topics", "resolution", "csat"],
             width=12,
             state="readonly"
         )
-        chart_combo.pack(side=tk.LEFT, padx=(0, 20))
+        chart_combo.pack(side=tk.LEFT, padx=(0, 15))
         chart_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_dashboard())
         
         # Refresh button
         ttk.Button(
-            control_frame, 
+            row1_frame, 
             text="🔄 Refresh", 
             command=self.refresh_dashboard
-        ).pack(side=tk.LEFT, padx=(20, 0))
+        ).pack(side=tk.LEFT, padx=(10, 0))
+        
+        # Row 2: Custom date range inputs (initially hidden, shown when "Custom Range" is selected)
+        self.custom_date_frame = ttk.Frame(control_frame)
+        
+        ttk.Label(self.custom_date_frame, text="Custom Range:").pack(side=tk.LEFT, padx=(0, 10))
+        
+        ttk.Label(self.custom_date_frame, text="From:").pack(side=tk.LEFT, padx=(0, 5))
+        self.start_date_entry = ttk.Entry(self.custom_date_frame, textvariable=self.custom_start_date, 
+                                          width=12)
+        self.start_date_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(self.custom_date_frame, text="📅", width=3,
+                   command=lambda: self._show_date_picker('start')).pack(side=tk.LEFT, padx=(0, 15))
+        
+        ttk.Label(self.custom_date_frame, text="To:").pack(side=tk.LEFT, padx=(0, 5))
+        self.end_date_entry = ttk.Entry(self.custom_date_frame, textvariable=self.custom_end_date,
+                                        width=12)
+        self.end_date_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(self.custom_date_frame, text="📅", width=3,
+                   command=lambda: self._show_date_picker('end')).pack(side=tk.LEFT, padx=(0, 15))
+        
+        ttk.Button(self.custom_date_frame, text="Apply", 
+                   command=self.refresh_dashboard).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Hint label for date format (inside custom_date_frame)
+        ttk.Label(self.custom_date_frame, text="(YYYY-MM-DD)", 
+                  font=('TkDefaultFont', 9, 'italic'), foreground='gray').pack(side=tk.LEFT)
         
         # === Stats Summary ===
         self.stats_frame = ttk.LabelFrame(self, text="Summary Statistics", padding="10")
@@ -252,18 +286,174 @@ class HistoryDashboard(ttk.Frame):
     
     def _get_date_range(self):
         """Get start and end dates based on selection."""
-        range_value = self.date_range.get()
+        preset = self.date_range.get()
         
-        # Always return None for both to get all data if dates aren't working
-        # This ensures data is shown even if date parsing failed
-        if range_value == "All":
+        if preset == "All Time":
             return None, None
         
-        end_date = date.today()
-        days = int(range_value)
-        start_date = end_date - timedelta(days=days)
+        elif preset == "Custom Range":
+            start_str = self.custom_start_date.get().strip()
+            end_str = self.custom_end_date.get().strip()
+            
+            start_date = None
+            end_date = None
+            
+            if start_str:
+                try:
+                    start_date = datetime.strptime(start_str, '%Y-%m-%d').date()
+                except ValueError:
+                    pass
+            
+            if end_str:
+                try:
+                    end_date = datetime.strptime(end_str, '%Y-%m-%d').date()
+                except ValueError:
+                    pass
+            
+            return start_date, end_date
         
-        return start_date, end_date
+        else:
+            # Parse preset like "Last 30 Days"
+            days_map = {
+                "Last 30 Days": 30,
+                "Last 60 Days": 60,
+                "Last 90 Days": 90,
+                "Last 180 Days": 180,
+                "Last 365 Days": 365
+            }
+            days = days_map.get(preset, 30)
+            end_date = date.today()
+            start_date = end_date - timedelta(days=days)
+            return start_date, end_date
+    
+    def _on_date_preset_change(self, *args):
+        """Handle date preset dropdown changes."""
+        preset = self.date_range.get()
+        
+        if preset == "Custom Range":
+            # Show custom date inputs on a new row
+            self.custom_date_frame.pack(fill=tk.X, pady=(5, 0))
+            # Set default dates if empty
+            if not self.custom_start_date.get():
+                default_start = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+                self.custom_start_date.set(default_start)
+            if not self.custom_end_date.get():
+                self.custom_end_date.set(date.today().strftime('%Y-%m-%d'))
+        else:
+            # Hide custom date inputs
+            self.custom_date_frame.pack_forget()
+            # Clear custom dates
+            self.custom_start_date.set("")
+            self.custom_end_date.set("")
+            # Refresh with new preset
+            self.refresh_dashboard()
+    
+    def _show_date_picker(self, which: str):
+        """Show a date picker dialog."""
+        import calendar
+        
+        # Create a simple date picker dialog
+        picker = tk.Toplevel(self)
+        picker.title(f"Select {'Start' if which == 'start' else 'End'} Date")
+        picker.geometry("280x320")
+        picker.transient(self)
+        picker.grab_set()
+        
+        # Center on parent
+        picker.update_idletasks()
+        x = self.winfo_rootx() + 100
+        y = self.winfo_rooty() + 50
+        picker.geometry(f"+{x}+{y}")
+        
+        # Current date or selected date
+        current_var = self.custom_start_date if which == 'start' else self.custom_end_date
+        try:
+            if current_var.get():
+                selected = datetime.strptime(current_var.get(), '%Y-%m-%d').date()
+            else:
+                selected = date.today()
+        except ValueError:
+            selected = date.today()
+        
+        # Variables for the picker
+        year_var = tk.IntVar(value=selected.year)
+        month_var = tk.IntVar(value=selected.month)
+        
+        # Year and Month selectors
+        nav_frame = ttk.Frame(picker)
+        nav_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        month_label = ttk.Label(nav_frame, text="", font=('TkDefaultFont', 11, 'bold'))
+        month_label.pack(side=tk.LEFT, expand=True)
+        
+        # Day grid
+        day_frame = ttk.Frame(picker)
+        day_frame.pack(fill=tk.BOTH, expand=True, padx=10)
+        
+        def update_calendar():
+            # Clear current days
+            for widget in day_frame.winfo_children():
+                widget.destroy()
+            
+            year = year_var.get()
+            month = month_var.get()
+            
+            month_label.config(text=f"{datetime(year, month, 1).strftime('%B %Y')}")
+            
+            # Day headers
+            for i, day_name in enumerate(['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']):
+                ttk.Label(day_frame, text=day_name, width=4, anchor='center').grid(row=0, column=i, pady=2)
+            
+            # Get first day of month and number of days
+            first_weekday = calendar.monthrange(year, month)[0]
+            num_days = calendar.monthrange(year, month)[1]
+            
+            # Fill in days
+            row = 1
+            col = first_weekday
+            for day in range(1, num_days + 1):
+                btn = ttk.Button(day_frame, text=str(day), width=4,
+                                command=lambda d=day: select_date(year_var.get(), month_var.get(), d))
+                btn.grid(row=row, column=col, pady=1, padx=1)
+                col += 1
+                if col > 6:
+                    col = 0
+                    row += 1
+        
+        def select_date(y, m, d):
+            selected_date = date(y, m, d)
+            current_var.set(selected_date.strftime('%Y-%m-%d'))
+            picker.destroy()
+        
+        def change_month(delta):
+            m = month_var.get() + delta
+            y = year_var.get()
+            if m < 1:
+                m = 12
+                y -= 1
+            elif m > 12:
+                m = 1
+                y += 1
+            month_var.set(m)
+            year_var.set(y)
+            update_calendar()
+        
+        # Navigation buttons
+        ttk.Button(nav_frame, text="◀", width=3,
+                   command=lambda: change_month(-1)).pack(side=tk.LEFT)
+        ttk.Button(nav_frame, text="▶", width=3,
+                   command=lambda: change_month(1)).pack(side=tk.RIGHT)
+        
+        # Quick select buttons
+        quick_frame = ttk.Frame(picker)
+        quick_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(quick_frame, text="Today", 
+                   command=lambda: select_date(date.today().year, date.today().month, date.today().day)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(quick_frame, text="Cancel", 
+                   command=picker.destroy).pack(side=tk.RIGHT, padx=2)
+        
+        update_calendar()
     
     def refresh_dashboard(self):
         """Refresh all dashboard components."""
