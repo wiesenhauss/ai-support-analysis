@@ -22,13 +22,25 @@ Usage:
         filter_dataframe_by_patterns,
     )
 """
+from __future__ import annotations  # Enables deferred evaluation of type hints (PEP 563)
 
 import os
 import re
 import logging
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, TYPE_CHECKING
 from functools import lru_cache
-import pandas as pd
+
+# Import pandas with fallback for type checking
+if TYPE_CHECKING:
+    import pandas as pd
+
+# Runtime import of pandas
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    pd = None  # type: ignore
 
 # Try to import openai, but don't fail if not available
 try:
@@ -274,6 +286,274 @@ def filter_dataframe_by_patterns(
     filtered_df = df[~combined_mask].copy()
     
     return (filtered_df, pattern_counts) if return_counts else filtered_df
+
+
+# =============================================================================
+# RETRY UTILITIES
+# =============================================================================
+
+import time
+import hashlib
+import json
+from functools import wraps
+
+
+def retry_with_backoff(
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 60.0,
+    exponential_base: float = 2.0,
+    retryable_exceptions: tuple = (Exception,),
+    on_retry: Optional[callable] = None
+):
+    """
+    Decorator that retries a function with exponential backoff.
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay in seconds
+        max_delay: Maximum delay between retries
+        exponential_base: Base for exponential backoff calculation
+        retryable_exceptions: Tuple of exceptions that trigger a retry
+        on_retry: Optional callback called on each retry (receives attempt, exception, delay)
+        
+    Returns:
+        Decorated function with retry logic
+        
+    Examples:
+        >>> @retry_with_backoff(max_retries=3, base_delay=1.0)
+        ... def flaky_function():
+        ...     # might fail sometimes
+        ...     pass
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except retryable_exceptions as e:
+                    last_exception = e
+                    
+                    if attempt < max_retries:
+                        delay = min(base_delay * (exponential_base ** attempt), max_delay)
+                        
+                        if on_retry:
+                            on_retry(attempt + 1, e, delay)
+                        
+                        time.sleep(delay)
+                    else:
+                        raise
+            
+            raise last_exception
+        
+        return wrapper
+    return decorator
+
+
+# =============================================================================
+# CONTENT HASHING UTILITIES
+# =============================================================================
+
+def compute_content_hash(content: str) -> str:
+    """
+    Compute a SHA-256 hash of the content for caching purposes.
+    
+    Args:
+        content: The string content to hash
+        
+    Returns:
+        Hex string of the SHA-256 hash
+    """
+    if not content or pd.isna(content):
+        return ""
+    return hashlib.sha256(str(content).encode('utf-8')).hexdigest()
+
+
+def compute_ticket_hash(row: Dict[str, Any], content_columns: List[str]) -> str:
+    """
+    Compute a hash for a ticket row based on its content columns.
+    
+    This is used to detect if a ticket's content has changed since last analysis.
+    
+    Args:
+        row: Dictionary containing the ticket data
+        content_columns: List of column names to include in the hash
+        
+    Returns:
+        Hex string of the combined content hash
+    """
+    content_parts = []
+    for col in content_columns:
+        value = row.get(col, "")
+        if pd.isna(value):
+            value = ""
+        content_parts.append(str(value))
+    
+    combined = "||".join(content_parts)
+    return compute_content_hash(combined)
+
+
+# =============================================================================
+# CHECKPOINT UTILITIES
+# =============================================================================
+
+class AnalysisCheckpoint:
+    """
+    Manages checkpoints for resuming interrupted analysis.
+    
+    Saves progress to a JSON file that can be used to resume
+    processing if the analysis is interrupted.
+    """
+    
+    def __init__(self, output_file: str):
+        """
+        Initialize checkpoint manager.
+        
+        Args:
+            output_file: Path to the output CSV file (checkpoint file will be derived from this)
+        """
+        self.output_file = output_file
+        self.checkpoint_file = f"{output_file}.checkpoint.json"
+        self.data = {
+            'input_file': '',
+            'output_file': output_file,
+            'last_processed_index': -1,
+            'total_rows': 0,
+            'processed_count': 0,
+            'skipped_count': 0,
+            'error_count': 0,
+            'started_at': None,
+            'updated_at': None,
+            'content_hashes': {},  # Maps row index to content hash for caching
+            'completed': False
+        }
+    
+    def exists(self) -> bool:
+        """Check if a checkpoint file exists."""
+        return os.path.exists(self.checkpoint_file)
+    
+    def load(self) -> bool:
+        """
+        Load checkpoint data from file.
+        
+        Returns:
+            True if checkpoint was loaded successfully, False otherwise
+        """
+        if not self.exists():
+            return False
+        
+        try:
+            with open(self.checkpoint_file, 'r') as f:
+                self.data = json.load(f)
+            return True
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not load checkpoint: {e}")
+            return False
+    
+    def save(self):
+        """Save checkpoint data to file."""
+        from datetime import datetime
+        self.data['updated_at'] = datetime.now().isoformat()
+        
+        try:
+            with open(self.checkpoint_file, 'w') as f:
+                json.dump(self.data, f, indent=2)
+        except IOError as e:
+            print(f"Warning: Could not save checkpoint: {e}")
+    
+    def update(self, 
+               last_index: int = None,
+               processed: int = None,
+               skipped: int = None,
+               errors: int = None,
+               content_hash: tuple = None):
+        """
+        Update checkpoint with progress.
+        
+        Args:
+            last_index: Last processed row index
+            processed: Number of successfully processed tickets
+            skipped: Number of skipped tickets
+            errors: Number of errors
+            content_hash: Tuple of (index, hash) to store for caching
+        """
+        if last_index is not None:
+            self.data['last_processed_index'] = last_index
+        if processed is not None:
+            self.data['processed_count'] = processed
+        if skipped is not None:
+            self.data['skipped_count'] = skipped
+        if errors is not None:
+            self.data['error_count'] = errors
+        if content_hash is not None:
+            idx, hash_value = content_hash
+            self.data['content_hashes'][str(idx)] = hash_value
+    
+    def start(self, input_file: str, total_rows: int):
+        """
+        Initialize a new checkpoint for starting analysis.
+        
+        Args:
+            input_file: Path to input CSV file
+            total_rows: Total number of rows to process
+        """
+        from datetime import datetime
+        self.data['input_file'] = input_file
+        self.data['total_rows'] = total_rows
+        self.data['started_at'] = datetime.now().isoformat()
+        self.data['completed'] = False
+        self.save()
+    
+    def complete(self):
+        """Mark the checkpoint as completed and optionally clean up."""
+        self.data['completed'] = True
+        self.save()
+    
+    def delete(self):
+        """Delete the checkpoint file."""
+        if self.exists():
+            try:
+                os.remove(self.checkpoint_file)
+            except IOError:
+                pass
+    
+    def get_resume_index(self) -> int:
+        """
+        Get the index to resume from.
+        
+        Returns:
+            The next index to process (last_processed_index + 1), or 0 if no checkpoint
+        """
+        return self.data['last_processed_index'] + 1
+    
+    def should_skip_cached(self, index: int, content_hash: str) -> bool:
+        """
+        Check if a row should be skipped based on cached hash.
+        
+        Args:
+            index: Row index
+            content_hash: Current content hash of the row
+            
+        Returns:
+            True if the content hasn't changed and can be skipped
+        """
+        cached_hash = self.data['content_hashes'].get(str(index))
+        return cached_hash is not None and cached_hash == content_hash
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get checkpoint statistics."""
+        return {
+            'last_processed': self.data['last_processed_index'],
+            'total_rows': self.data['total_rows'],
+            'processed': self.data['processed_count'],
+            'skipped': self.data['skipped_count'],
+            'errors': self.data['error_count'],
+            'started_at': self.data['started_at'],
+            'updated_at': self.data['updated_at']
+        }
 
 
 # =============================================================================

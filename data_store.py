@@ -56,6 +56,55 @@ class DataStore:
         self.engine = get_engine(self.db_path)
         create_tables(self.engine)
         
+        # Run migrations for new columns
+        self._run_migrations()
+        
+    def _run_migrations(self):
+        """
+        Run database migrations to add new columns.
+        
+        This handles adding columns that were added to the model after
+        the database was originally created.
+        """
+        from sqlalchemy import text, inspect
+        
+        inspector = inspect(self.engine)
+        
+        # Get existing columns in ticket_analyses table
+        if 'ticket_analyses' in inspector.get_table_names():
+            existing_columns = {col['name'] for col in inspector.get_columns('ticket_analyses')}
+            
+            # Columns to add if missing (column_name, column_type, default)
+            migrations = [
+                ('product_area', 'VARCHAR(100)', None),
+                ('feature_requests', 'TEXT', None),
+                ('pain_points', 'TEXT', None),
+            ]
+            
+            with self.engine.connect() as conn:
+                for col_name, col_type, default in migrations:
+                    if col_name not in existing_columns:
+                        default_clause = f" DEFAULT {default}" if default else ""
+                        sql = f"ALTER TABLE ticket_analyses ADD COLUMN {col_name} {col_type}{default_clause}"
+                        try:
+                            conn.execute(text(sql))
+                            conn.commit()
+                            print(f"Migration: Added column '{col_name}' to ticket_analyses")
+                        except Exception as e:
+                            # Column might already exist or other error
+                            print(f"Migration note: {col_name} - {e}")
+        
+        # Also check product_insights table
+        if 'product_insights' not in inspector.get_table_names():
+            # Import and create the ProductInsight table
+            try:
+                from product_insights import ProductInsight, insight_tickets
+                ProductInsight.__table__.create(self.engine, checkfirst=True)
+                insight_tickets.create(self.engine, checkfirst=True)
+                print("Migration: Created product_insights and insight_tickets tables")
+            except Exception as e:
+                print(f"Migration note: product_insights - {e}")
+        
     def _get_session(self):
         """Get a new database session."""
         return get_session(self.engine)

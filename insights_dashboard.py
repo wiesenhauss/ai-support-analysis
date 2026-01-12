@@ -87,13 +87,24 @@ class InsightsDashboard(ttk.Frame):
         self.data_queue = queue.Queue()
         
         # Initialize connections
+        self.init_error = None
         if INSIGHTS_AVAILABLE:
             try:
                 self.data_store = get_data_store()
                 self.insights_store = get_insights_store()
+            except Exception as e:
+                self.init_error = f"Data store error: {e}"
+                print(f"Failed to initialize data store: {e}")
+            
+            try:
                 self.extractor = get_insight_extractor()
             except Exception as e:
-                print(f"Failed to initialize insights: {e}")
+                self.init_error = f"Extractor error: {e}"
+                print(f"Failed to initialize extractor: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            self.init_error = "Insights modules not available"
         
         # Filter variables
         self.filter_type = tk.StringVar(value="All")
@@ -294,22 +305,37 @@ class InsightsDashboard(ttk.Frame):
         tickets_tab = ttk.Frame(self.detail_notebook, padding="10")
         self.detail_notebook.add(tickets_tab, text="Source Tickets")
         
-        self.tickets_tree = ttk.Treeview(tickets_tab, columns=('date', 'sentiment', 'summary'),
+        # Hint label
+        ttk.Label(tickets_tab, text="💡 Double-click a ticket to open in Zendesk", 
+                  font=('Helvetica', 9, 'italic')).pack(anchor='w', pady=(0, 5))
+        
+        tickets_frame = ttk.Frame(tickets_tab)
+        tickets_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.tickets_tree = ttk.Treeview(tickets_frame, columns=('ticket_id', 'date', 'sentiment', 'summary'),
                                          show='headings', height=10)
+        self.tickets_tree.heading('ticket_id', text='Ticket #')
         self.tickets_tree.heading('date', text='Date')
         self.tickets_tree.heading('sentiment', text='Sentiment')
         self.tickets_tree.heading('summary', text='Summary')
         
-        self.tickets_tree.column('date', width=100)
-        self.tickets_tree.column('sentiment', width=80)
-        self.tickets_tree.column('summary', width=300)
+        self.tickets_tree.column('ticket_id', width=90)
+        self.tickets_tree.column('date', width=90)
+        self.tickets_tree.column('sentiment', width=70)
+        self.tickets_tree.column('summary', width=250)
         
-        tickets_scroll = ttk.Scrollbar(tickets_tab, orient=tk.VERTICAL,
+        tickets_scroll = ttk.Scrollbar(tickets_frame, orient=tk.VERTICAL,
                                        command=self.tickets_tree.yview)
         self.tickets_tree.configure(yscrollcommand=tickets_scroll.set)
         
         self.tickets_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tickets_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind double-click to open ticket in browser
+        self.tickets_tree.bind('<Double-1>', self._on_ticket_double_click)
+        
+        # Store ticket URLs for opening
+        self.ticket_urls = {}
         
         # Tab 3: Trend Chart (if matplotlib available)
         if MATPLOTLIB_AVAILABLE:
@@ -436,22 +462,44 @@ class InsightsDashboard(ttk.Frame):
     
     def _load_source_tickets(self, insight: ProductInsight):
         """Load source tickets for the insight."""
-        # Clear current tickets
+        # Clear current tickets and URLs
         for item in self.tickets_tree.get_children():
             self.tickets_tree.delete(item)
+        self.ticket_urls = {}
         
         if not insight.tickets:
             return
         
         for ticket in insight.tickets[:50]:  # Limit to 50
+            # Extract ticket number from URL (e.g., "https://a8c.zendesk.com/agent/tickets/10452479")
+            ticket_url = ticket.ticket_id or ''
+            ticket_num = ticket_url.split('/')[-1] if '/' in ticket_url else ticket_url
+            
             date_str = ticket.created_date.strftime('%Y-%m-%d') if ticket.created_date else 'N/A'
             summary = ticket.detail_summary[:80] + '...' if ticket.detail_summary and len(ticket.detail_summary) > 80 else (ticket.detail_summary or 'N/A')
             
-            self.tickets_tree.insert('', 'end', values=(
+            item_id = self.tickets_tree.insert('', 'end', values=(
+                ticket_num,
                 date_str,
                 ticket.sentiment or 'N/A',
                 summary
             ))
+            
+            # Store URL for this item
+            self.ticket_urls[item_id] = ticket_url
+    
+    def _on_ticket_double_click(self, event):
+        """Handle double-click on a ticket to open in browser."""
+        import webbrowser
+        
+        selection = self.tickets_tree.selection()
+        if selection:
+            item_id = selection[0]
+            url = self.ticket_urls.get(item_id)
+            if url and url.startswith('http'):
+                webbrowser.open(url)
+            else:
+                messagebox.showinfo("Info", f"No valid URL for this ticket: {url}")
     
     def _draw_trend_chart(self, insight: ProductInsight):
         """Draw trend chart for the insight."""
@@ -502,30 +550,61 @@ class InsightsDashboard(ttk.Frame):
     def _extract_new_insights(self):
         """Extract new insights from recent tickets."""
         if not self.extractor:
-            messagebox.showerror("Error", "Insight extractor not available")
+            error_msg = "Insight extractor not available"
+            if self.init_error:
+                error_msg += f"\n\nDetails: {self.init_error}"
+            error_msg += "\n\nCheck the terminal for more details."
+            messagebox.showerror("Error", error_msg)
             return
         
-        # Ask for date range
-        days = 30  # Default to 30 days
+        # Create a dialog to choose date range
+        dialog = tk.Toplevel(self)
+        dialog.title("Extraction Options")
+        dialog.geometry("300x150")
+        dialog.transient(self)
+        dialog.grab_set()
         
-        def run_extraction():
-            try:
-                end_date = date.today()
-                start_date = end_date - timedelta(days=days)
-                
-                result = self.extractor.extract_insights_from_batch(
-                    start_date=start_date,
-                    end_date=end_date
-                )
-                
-                self.data_queue.put(('extraction_complete', result))
-            except Exception as e:
-                self.data_queue.put(('extraction_error', str(e)))
+        ttk.Label(dialog, text="Extract insights from:").pack(pady=10)
         
-        # Run in background
-        messagebox.showinfo("Info", f"Extracting insights from the last {days} days...\nThis may take a moment.")
-        threading.Thread(target=run_extraction, daemon=True).start()
-        self.after(500, self._check_extraction_result)
+        range_var = tk.StringVar(value="all")
+        ttk.Radiobutton(dialog, text="All imported data", variable=range_var, value="all").pack(anchor='w', padx=20)
+        ttk.Radiobutton(dialog, text="Last 30 days", variable=range_var, value="30").pack(anchor='w', padx=20)
+        ttk.Radiobutton(dialog, text="Last 90 days", variable=range_var, value="90").pack(anchor='w', padx=20)
+        
+        def start_extraction():
+            range_choice = range_var.get()
+            dialog.destroy()
+            
+            def run_extraction():
+                try:
+                    if range_choice == "all":
+                        start_date = None
+                        end_date = None
+                        print("[InsightExtractor] Extracting from ALL data (no date filter)")
+                    else:
+                        days = int(range_choice)
+                        end_date = date.today()
+                        start_date = end_date - timedelta(days=days)
+                        print(f"[InsightExtractor] Extracting from last {days} days")
+                    
+                    result = self.extractor.extract_insights_from_batch(
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                    
+                    self.data_queue.put(('extraction_complete', result))
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    self.data_queue.put(('extraction_error', str(e)))
+            
+            # Run in background
+            range_label = "all data" if range_choice == "all" else f"the last {range_choice} days"
+            messagebox.showinfo("Info", f"Extracting insights from {range_label}...\nThis may take a moment.")
+            threading.Thread(target=run_extraction, daemon=True).start()
+            self.after(500, self._check_extraction_result)
+        
+        ttk.Button(dialog, text="Start Extraction", command=start_extraction).pack(pady=15)
     
     def _check_extraction_result(self):
         """Check for extraction result."""

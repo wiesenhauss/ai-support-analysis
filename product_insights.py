@@ -20,7 +20,7 @@ from sqlalchemy import (
     Column, Integer, String, Text, Float, Date, DateTime,
     ForeignKey, Index, Table, Enum as SQLEnum, func
 )
-from sqlalchemy.orm import relationship, Session
+from sqlalchemy.orm import relationship, Session, joinedload
 import pandas as pd
 
 from models import Base, TicketAnalysis
@@ -401,15 +401,32 @@ class ProductInsightsStore:
             if limit:
                 query = query.limit(limit)
             
-            return query.all()
+            insights = query.all()
+            
+            # Detach from session so they can be used after session closes
+            for insight in insights:
+                session.expunge(insight)
+            
+            return insights
         finally:
             session.close()
     
     def get_insight_by_id(self, insight_id: int) -> Optional[ProductInsight]:
-        """Get a single insight by ID."""
+        """Get a single insight by ID with eagerly loaded tickets."""
         session = self._get_session()
         try:
-            return session.query(ProductInsight).get(insight_id)
+            insight = session.query(ProductInsight).options(
+                joinedload(ProductInsight.tickets)
+            ).filter(ProductInsight.id == insight_id).first()
+            
+            # Detach from session so it can be used after session closes
+            if insight:
+                session.expunge(insight)
+                # Also expunge tickets to avoid DetachedInstanceError
+                for ticket in insight.tickets:
+                    session.expunge(ticket)
+            
+            return insight
         finally:
             session.close()
     
@@ -550,6 +567,9 @@ def get_insights_store() -> ProductInsightsStore:
     global _insights_store
     if _insights_store is None:
         from data_store import get_data_store
+        from sqlalchemy.orm import sessionmaker
         ds = get_data_store()
-        _insights_store = ProductInsightsStore(ds.Session)
+        # Create a session factory bound to the same engine
+        Session = sessionmaker(bind=ds.engine)
+        _insights_store = ProductInsightsStore(Session)
     return _insights_store

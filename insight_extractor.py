@@ -103,31 +103,55 @@ class InsightExtractor:
         try:
             query = session.query(TicketAnalysis)
             
-            # Apply filters
+            # Apply date filters only if dates exist
             if start_date:
-                query = query.filter(TicketAnalysis.created_date >= start_date)
+                # Include tickets without dates OR within date range
+                query = query.filter(
+                    (TicketAnalysis.created_date.is_(None)) |
+                    (TicketAnalysis.created_date >= start_date)
+                )
             if end_date:
-                query = query.filter(TicketAnalysis.created_date <= end_date)
+                query = query.filter(
+                    (TicketAnalysis.created_date.is_(None)) |
+                    (TicketAnalysis.created_date <= end_date)
+                )
             if product_area:
                 query = query.filter(TicketAnalysis.product_area == product_area)
             
-            # Only get tickets with feedback
+            # Get tickets that have ANY analyzable content
+            # Include: feature_requests, pain_points, product_feedback, 
+            # OR negative sentiment (implies pain points)
+            # OR main_topic (can extract insights from topics)
             query = query.filter(
                 (TicketAnalysis.feature_requests.isnot(None)) |
                 (TicketAnalysis.pain_points.isnot(None)) |
-                (TicketAnalysis.product_feedback.isnot(None))
+                ((TicketAnalysis.product_feedback.isnot(None)) & (TicketAnalysis.product_feedback != 'NONE')) |
+                (TicketAnalysis.sentiment == 'Negative') |
+                (TicketAnalysis.main_topic.isnot(None))
             )
             
-            query = query.order_by(TicketAnalysis.created_date.desc())
+            query = query.order_by(TicketAnalysis.id.desc())  # Use ID if dates are missing
             
             if limit:
                 query = query.limit(limit)
             
             tickets = query.all()
             
+            # Debug: Show what's in the database
+            total_tickets = session.query(TicketAnalysis).count()
+            print(f"[InsightExtractor] Database has {total_tickets} total tickets")
+            if start_date or end_date:
+                print(f"[InsightExtractor] Date filter: {start_date} to {end_date}")
+            else:
+                print(f"[InsightExtractor] Date filter: None (processing ALL data)")
+            print(f"[InsightExtractor] Found {len(tickets)} tickets with extractable content")
+            
             feedback_items = []
             for ticket in tickets:
-                # Parse feature requests
+                # Determine product area (use main_topic as fallback)
+                area = ticket.product_area or self._infer_product_area(ticket.main_topic) or 'Other'
+                
+                # Parse feature requests (new field)
                 feature_requests = self._parse_json_array(ticket.feature_requests)
                 for fr in feature_requests:
                     if fr and fr.strip():
@@ -136,13 +160,13 @@ class InsightExtractor:
                             'ticket_id': ticket.id,
                             'type': 'feature_request',
                             'content': fr.strip(),
-                            'product_area': ticket.product_area or 'Other',
+                            'product_area': area,
                             'sentiment': ticket.sentiment,
                             'resolved': ticket.issue_resolved,
                             'date': ticket.created_date
                         })
                 
-                # Parse pain points
+                # Parse pain points (new field)
                 pain_points = self._parse_json_array(ticket.pain_points)
                 for pp in pain_points:
                     if pp and pp.strip():
@@ -151,14 +175,14 @@ class InsightExtractor:
                             'ticket_id': ticket.id,
                             'type': 'pain_point',
                             'content': pp.strip(),
-                            'product_area': ticket.product_area or 'Other',
+                            'product_area': area,
                             'sentiment': ticket.sentiment,
                             'resolved': ticket.issue_resolved,
                             'date': ticket.created_date
                         })
                 
-                # Also consider product feedback text
-                if ticket.product_feedback and ticket.product_feedback != 'NONE':
+                # Extract from product feedback text (works with old data)
+                if ticket.product_feedback and ticket.product_feedback not in ('NONE', 'None', ''):
                     # Determine type based on sentiment
                     fb_type = 'pain_point' if ticket.sentiment == 'Negative' else 'improvement'
                     feedback_items.append({
@@ -166,12 +190,36 @@ class InsightExtractor:
                         'ticket_id': ticket.id,
                         'type': fb_type,
                         'content': ticket.product_feedback[:500],  # Truncate long feedback
-                        'product_area': ticket.product_area or 'Other',
+                        'product_area': area,
                         'sentiment': ticket.sentiment,
                         'resolved': ticket.issue_resolved,
                         'date': ticket.created_date
                     })
+                
+                # For negative sentiment tickets without explicit feedback,
+                # use the customer_goal or what_happened as pain point
+                # Check if we haven't extracted anything from this ticket yet
+                ticket_has_feedback = any(f['ticket_id'] == ticket.id for f in feedback_items)
+                if ticket.sentiment == 'Negative' and not ticket_has_feedback:
+                    content = None
+                    if ticket.what_happened and len(ticket.what_happened) > 50:
+                        content = ticket.what_happened[:500]
+                    elif ticket.customer_goal:
+                        content = f"Unable to: {ticket.customer_goal}"
+                    
+                    if content:
+                        feedback_items.append({
+                            'id': len(feedback_items) + 1,
+                            'ticket_id': ticket.id,
+                            'type': 'pain_point',
+                            'content': content,
+                            'product_area': area,
+                            'sentiment': ticket.sentiment,
+                            'resolved': ticket.issue_resolved,
+                            'date': ticket.created_date
+                        })
             
+            print(f"[InsightExtractor] Extracted {len(feedback_items)} feedback items")
             return feedback_items
         finally:
             session.close()
@@ -187,6 +235,56 @@ class InsightExtractor:
             return []
         except (json.JSONDecodeError, TypeError):
             return []
+    
+    def _infer_product_area(self, main_topic: Optional[str]) -> Optional[str]:
+        """Infer product area from main_topic if product_area is not set."""
+        if not main_topic:
+            return None
+        
+        topic_lower = main_topic.lower()
+        
+        # Map common topics to product areas
+        mappings = {
+            'domain': 'Domains',
+            'email': 'Email',
+            'theme': 'Themes',
+            'plugin': 'Plugins',
+            'billing': 'Billing',
+            'payment': 'Billing',
+            'refund': 'Billing',
+            'plan': 'Plans',
+            'upgrade': 'Plans',
+            'downgrade': 'Plans',
+            'cancel': 'Plans',
+            'editor': 'Editor',
+            'block': 'Editor',
+            'gutenberg': 'Editor',
+            'media': 'Media',
+            'image': 'Media',
+            'video': 'Media',
+            'seo': 'SEO',
+            'security': 'Security',
+            'ssl': 'Security',
+            'password': 'Security',
+            'performance': 'Performance',
+            'speed': 'Performance',
+            'slow': 'Performance',
+            'migration': 'Migration',
+            'import': 'Migration',
+            'export': 'Migration',
+            'transfer': 'Migration',
+            'account': 'Account',
+            'login': 'Account',
+            'ai': 'AI Features',
+            'mobile': 'Mobile',
+            'app': 'Mobile',
+        }
+        
+        for keyword, area in mappings.items():
+            if keyword in topic_lower:
+                return area
+        
+        return None
     
     def cluster_feedback_with_ai(
         self,

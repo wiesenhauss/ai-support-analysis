@@ -67,6 +67,9 @@ from utils import (
     normalize_file_path,
     find_column_by_substring,
     get_openai_client,
+    retry_with_backoff,
+    AnalysisCheckpoint,
+    compute_ticket_hash,
 )
 
 try:
@@ -608,40 +611,88 @@ def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_loc
 
 	return None
 
-def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int = 25, use_local: bool = False, max_workers: int = 5) -> None:
-	"""Process the CSV file using concurrent threads for improved performance."""
+def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int = 25, 
+                use_local: bool = False, max_workers: int = 5, 
+                enable_caching: bool = True, resume: bool = True) -> None:
+	"""Process the CSV file using concurrent threads for improved performance.
+	
+	Args:
+		input_file: Path to input CSV file
+		output_file: Path to output CSV file
+		api_key: OpenAI API key
+		batch_size: Number of tickets per save batch
+		use_local: Use local AI server instead of OpenAI
+		max_workers: Number of concurrent threads
+		enable_caching: Skip tickets with unchanged content (default: True)
+		resume: Resume from checkpoint if available (default: True)
+	"""
 	try:
+		# Initialize checkpoint manager
+		checkpoint = AnalysisCheckpoint(output_file)
+		resume_index = 0
+		cached_results = {}
+		
+		# Check for existing checkpoint
+		if resume and checkpoint.exists():
+			if checkpoint.load():
+				stats = checkpoint.get_stats()
+				if not checkpoint.data.get('completed', False):
+					print(f"\n📋 Found incomplete analysis checkpoint!")
+					print(f"   Started: {stats['started_at']}")
+					print(f"   Progress: {stats['last_processed'] + 1}/{stats['total_rows']} rows")
+					print(f"   Processed: {stats['processed']}, Skipped: {stats['skipped']}, Errors: {stats['errors']}")
+					
+					# In non-interactive mode (GUI), always resume
+					# In interactive mode, could ask user
+					resume_index = checkpoint.get_resume_index()
+					print(f"   ▶️ Resuming from row {resume_index}...")
+				else:
+					print("📋 Previous analysis completed. Starting fresh.")
+					checkpoint.delete()
+		
 		# Read CSV (input file)
 		df = read_csv_file(input_file)
 		total_rows = len(df)
 		
-		print(f"🚀 Starting concurrent processing with {max_workers} threads")
-		print(f"📊 Processing {total_rows:,} tickets...")
+		# If resuming, load partial results from existing output file
+		if resume_index > 0 and os.path.exists(output_file):
+			print(f"📂 Loading partial results from {output_file}...")
+			existing_df = pd.read_csv(output_file)
+			# Copy existing results to df
+			for col in existing_df.columns:
+				if col in df.columns or col.startswith(('DETAIL_', 'CUSTOMER_', 'SENTIMENT_', 'WHAT_', 'ISSUE_', 
+				                                        'INTERACTION_', 'PRODUCT_', 'RELATED_', 'AI_', 'MAIN_', 
+				                                        'FEATURE_', 'PAIN_', 'CONTENT_HASH')):
+					df[col] = existing_df[col]
 		
-		# Initialize report columns
-		df['DETAIL_SUMMARY'] = None
-		df['CUSTOMER_GOAL'] = None
-		df['SENTIMENT_ANALYSIS'] = None
-		df['WHAT_HAPPENED'] = None
-		df['ISSUE_RESOLVED'] = None
-		df['INTERACTION_TOPICS'] = None
-		df['PRODUCT_FEEDBACK'] = None
-		df['RELATED_TO_PRODUCT'] = None
-		df['RELATED_TO_SERVICE'] = None
-		df['AI_FEEDBACK'] = None
-		df['PRODUCT_AREA'] = None
-		df['FEATURE_REQUESTS'] = None
-		df['PAIN_POINTS'] = None
-		df['MAIN_TOPIC'] = None
+		rows_to_process = total_rows - resume_index
+		print(f"🚀 Starting concurrent processing with {max_workers} threads")
+		print(f"📊 Processing {rows_to_process:,} tickets (of {total_rows:,} total)...")
+		if enable_caching:
+			print(f"💾 Smart caching enabled - unchanged tickets will be skipped")
+		
+		# Initialize report columns (only if not already present from resume)
+		report_columns = ['DETAIL_SUMMARY', 'CUSTOMER_GOAL', 'SENTIMENT_ANALYSIS', 'WHAT_HAPPENED',
+		                  'ISSUE_RESOLVED', 'INTERACTION_TOPICS', 'PRODUCT_FEEDBACK', 
+		                  'RELATED_TO_PRODUCT', 'RELATED_TO_SERVICE', 'AI_FEEDBACK',
+		                  'PRODUCT_AREA', 'FEATURE_REQUESTS', 'PAIN_POINTS', 'MAIN_TOPIC', 'CONTENT_HASH']
+		for col in report_columns:
+			if col not in df.columns:
+				df[col] = None
+		
+		# Start checkpoint tracking
+		checkpoint.start(input_file, total_rows)
 		
 		# Initialize progress tracker and rate limiter
-		progress_tracker = ThreadSafeProgressTracker(total_rows)
+		progress_tracker = ThreadSafeProgressTracker(rows_to_process)
 		
 		# Set rate limit based on API type and thread count
+		# OpenAI tier limits vary - retry logic handles rate limit errors
+		# With 30 threads, allow higher throughput
 		if use_local:
-			rate_limit = 50.0  # Local server can handle more requests
+			rate_limit = 200.0  # Local server can handle more requests
 		else:
-			rate_limit = 15.0  # Conservative for OpenAI API with multiple threads
+			rate_limit = 60.0  # Higher rate for OpenAI API with 30 threads
 		
 		rate_limiter = RateLimiter(rate_limit)
 		
@@ -650,13 +701,39 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 				   bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} tickets '
 				   '[{elapsed}<{remaining}, {rate_fmt}{postfix}]')
 		
+		# Determine content columns for hashing
+		message_body_col = df.attrs.get('message_body_column', 'Interaction Message Body')
+		content_columns = [message_body_col, 'CSAT Rating', 'CSAT Reason', 'CSAT Comment']
+		
 		# Create tasks for all tickets - copy row data as a dict to avoid threading issues
 		# This prevents race conditions with concurrent DataFrame access
 		# Use loc for better performance with large DataFrames
 		tasks = []
+		cached_count = 0
 		for idx in df.index:
+			# Skip rows before resume index
+			if idx < resume_index:
+				continue
+			
 			row_dict = df.loc[idx].to_dict()
+			
+			# Compute content hash for caching
+			if enable_caching:
+				content_hash = compute_ticket_hash(row_dict, content_columns)
+				existing_hash = row_dict.get('CONTENT_HASH')
+				
+				# Skip if content unchanged and already has results
+				if existing_hash and existing_hash == content_hash and row_dict.get('DETAIL_SUMMARY'):
+					cached_count += 1
+					progress_tracker.update(skipped=1)
+					continue
+				
+				row_dict['_content_hash'] = content_hash
+			
 			tasks.append(TicketTask(index=idx, row=row_dict))
+		
+		if cached_count > 0:
+			print(f"⚡ Skipped {cached_count} unchanged tickets (cached)")
 		
 		# Free up memory by clearing DataFrame reference if not needed
 		# Note: We keep df for updates, but tasks now have independent copies
@@ -665,7 +742,7 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 		results_lock = threading.Lock()
 		save_counter = 0
 		
-		def update_dataframe_with_result(result: ProcessingResult):
+		def update_dataframe_with_result(result: ProcessingResult, content_hash: str = None):
 			"""Thread-safe function to update DataFrame with result"""
 			nonlocal save_counter
 			
@@ -680,6 +757,10 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 					# Update DataFrame
 					for key, value in result.report.items():
 						df.at[result.index, key] = value
+					
+					# Store content hash for future caching
+					if content_hash:
+						df.at[result.index, 'CONTENT_HASH'] = content_hash
 				else:
 					# Handle errors with appropriate default values for each field type
 					progress_tracker.update(errors=1)
@@ -697,6 +778,16 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 					df.at[result.index, 'RELATED_TO_SERVICE'] = False
 					df.at[result.index, 'AI_FEEDBACK'] = False
 				
+				# Update checkpoint
+				tracker_stats = progress_tracker.get_stats()
+				checkpoint.update(
+					last_index=result.index,
+					processed=tracker_stats['processed'],
+					skipped=tracker_stats['skipped'],
+					errors=tracker_stats['errors'],
+					content_hash=(result.index, content_hash) if content_hash else None
+				)
+				
 				# Update progress bar
 				stats = progress_tracker.get_stats()
 				pbar.update(1)
@@ -705,13 +796,14 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 					'Skipped': stats['skipped'], 
 					'Errors': stats['errors'],
 					'Rate': f"{stats['rate']:.1f}/s",
-					'Remaining': str(stats['remaining_time']).split('.')[0]
+					'ETA': str(stats['remaining_time']).split('.')[0]
 				})
 				
 				# Save progress every 50 completions
 				save_counter += 1
 				if save_counter >= 50:
 					df.to_csv(output_file, index=False)
+					checkpoint.save()  # Save checkpoint with CSV
 					save_counter = 0
 					# Force garbage collection to free memory
 					gc.collect()
@@ -719,6 +811,9 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 		# Process tickets concurrently
 		# Get df attributes for column mapping
 		df_attrs = df.attrs if hasattr(df, 'attrs') else {}
+		
+		# Store content hashes for passing to result handler
+		task_hashes = {task.index: task.row.get('_content_hash') for task in tasks}
 		
 		with ThreadPoolExecutor(max_workers=max_workers) as executor:
 			# Submit all tasks - row data is now copied in the task itself
@@ -730,9 +825,10 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 			# Process completed tasks as they finish
 			for future in as_completed(future_to_task):
 				task = future_to_task[future]
+				content_hash = task_hashes.get(task.index)
 				try:
 					result = future.result()
-					update_dataframe_with_result(result)
+					update_dataframe_with_result(result, content_hash)
 				except Exception as e:
 					# Handle unexpected errors
 					error_result = ProcessingResult(
@@ -741,32 +837,43 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 						report=None,
 						error=f"Unexpected error: {str(e)}"
 					)
-					update_dataframe_with_result(error_result)
+					update_dataframe_with_result(error_result, content_hash)
 		
 		# Final save
 		df.to_csv(output_file, index=False)
 		pbar.close()
 		
+		# Mark checkpoint as complete and clean up
+		checkpoint.complete()
+		checkpoint.delete()  # Remove checkpoint file on successful completion
+		
 		# Clean up memory by removing references
 		del tasks
 		del future_to_task
+		del task_hashes
 		gc.collect()
 		
 		# Final statistics
 		final_stats = progress_tracker.get_stats()
 		print(f"\n✅ Concurrent processing completed!")
 		print(f"📊 Tickets processed: {final_stats['processed']:,}")
-		print(f"⏭️  Tickets skipped: {final_stats['skipped']:,}")
+		print(f"⏭️  Tickets skipped: {final_stats['skipped']:,} (including {cached_count} cached)")
 		print(f"❌ Errors encountered: {final_stats['errors']:,}")
 		print(f"⏱️  Total time: {str(final_stats['elapsed']).split('.')[0]}")
 		print(f"🚀 Average speed: {final_stats['rate']:.2f} tickets/second")
-		print(f"🎯 Effective throughput: {final_stats['processed'] / final_stats['elapsed'].total_seconds():.2f} successful analyses/second")
+		if final_stats['elapsed'].total_seconds() > 0:
+			print(f"🎯 Effective throughput: {final_stats['processed'] / final_stats['elapsed'].total_seconds():.2f} successful analyses/second")
 		print(f"💾 Output saved to: {output_file}")
 		
 	except Exception as e:
 		print(f"❌ Error in concurrent processing: {str(e)}")
 		# Save progress even if there's an error
-		df.to_csv(output_file, index=False)
+		try:
+			df.to_csv(output_file, index=False)
+			checkpoint.save()  # Save checkpoint for potential resume
+			print(f"💾 Progress saved. You can resume this analysis later.")
+		except:
+			pass
 		raise
 
 def main():
@@ -780,7 +887,9 @@ def main():
 	parser = argparse.ArgumentParser(description='Process CSAT survey data and support ticket interactions.')
 	parser.add_argument('-file', '--input-file', type=str, help='Path to the input CSV file')
 	parser.add_argument('--local', action='store_true', help='Use local AI server instead of OpenAI API')
-	parser.add_argument('--threads', type=int, default=5, help='Number of concurrent processing threads (default: 5)')
+	parser.add_argument('--threads', type=int, default=30, help='Number of concurrent processing threads (default: 30)')
+	parser.add_argument('--no-cache', action='store_true', help='Disable smart caching (re-analyze all tickets)')
+	parser.add_argument('--no-resume', action='store_true', help='Start fresh, ignore any existing checkpoint')
 	args = parser.parse_args()
 	
 	# Get input file path from command line argument or user input
@@ -817,7 +926,17 @@ def main():
 	else:
 		print(f"Using OpenAI API with {MAX_WORKERS} concurrent threads")
 	
-	process_csv(INPUT_FILE, OUTPUT_FILE, API_KEY, BATCH_SIZE, use_local=args.local, max_workers=MAX_WORKERS)
+	enable_caching = not args.no_cache
+	enable_resume = not args.no_resume
+	
+	if not enable_caching:
+		print("⚠️  Smart caching disabled - all tickets will be re-analyzed")
+	if not enable_resume:
+		print("⚠️  Resume disabled - starting fresh")
+	
+	process_csv(INPUT_FILE, OUTPUT_FILE, API_KEY, BATCH_SIZE, 
+	            use_local=args.local, max_workers=MAX_WORKERS,
+	            enable_caching=enable_caching, resume=enable_resume)
 	
 if __name__ == "__main__":
 	main()
