@@ -242,20 +242,27 @@ class AnalyticsEngine:
         # Pivot sentiment counts
         sentiment_counts = df.groupby(['period', 'sentiment']).size().unstack(fill_value=0)
         
-        # Ensure all sentiment columns exist
+        # Ensure all required sentiment columns exist and keep only those
         for col in ['Positive', 'Neutral', 'Negative']:
             if col not in sentiment_counts.columns:
                 sentiment_counts[col] = 0
         
+        # Keep only the three standard sentiment columns (drop any extras like None, '', etc.)
+        sentiment_counts = sentiment_counts[['Positive', 'Neutral', 'Negative']].copy()
+        
         # Calculate totals and percentages
         sentiment_counts['total'] = sentiment_counts.sum(axis=1)
-        sentiment_counts['positive_pct'] = sentiment_counts['Positive'] / sentiment_counts['total'] * 100
-        sentiment_counts['neutral_pct'] = sentiment_counts['Neutral'] / sentiment_counts['total'] * 100
-        sentiment_counts['negative_pct'] = sentiment_counts['Negative'] / sentiment_counts['total'] * 100
+        sentiment_counts['positive_pct'] = (sentiment_counts['Positive'] / sentiment_counts['total'] * 100).fillna(0)
+        sentiment_counts['neutral_pct'] = (sentiment_counts['Neutral'] / sentiment_counts['total'] * 100).fillna(0)
+        sentiment_counts['negative_pct'] = (sentiment_counts['Negative'] / sentiment_counts['total'] * 100).fillna(0)
         
+        # Reset index and rename columns explicitly
         result = sentiment_counts.reset_index()
-        result.columns = ['period', 'positive', 'neutral', 'negative', 'total', 
-                         'positive_pct', 'neutral_pct', 'negative_pct']
+        result = result.rename(columns={
+            'Positive': 'positive',
+            'Neutral': 'neutral', 
+            'Negative': 'negative'
+        })
         
         return result.sort_values('period')
     
@@ -330,6 +337,20 @@ class AnalyticsEngine:
         if df.empty:
             return pd.DataFrame()
         
+        # Convert issue_resolved to numeric (handles 'True'/'False', '1'/'0', True/False, 1/0)
+        def to_numeric_bool(val):
+            if pd.isna(val):
+                return 0
+            if isinstance(val, bool):
+                return 1 if val else 0
+            if isinstance(val, (int, float)):
+                return 1 if val else 0
+            if isinstance(val, str):
+                return 1 if val.lower() in ('true', '1', 'yes') else 0
+            return 0
+        
+        df['issue_resolved_num'] = df['issue_resolved'].apply(to_numeric_bool)
+        
         # Group by time period
         if granularity == 'day':
             df['period'] = df['created_date'].dt.date
@@ -340,11 +361,11 @@ class AnalyticsEngine:
         
         # Calculate resolution stats per period
         resolution_stats = df.groupby('period').agg({
-            'issue_resolved': ['sum', 'count']
+            'issue_resolved_num': ['sum', 'count']
         }).reset_index()
         resolution_stats.columns = ['period', 'resolved', 'total']
         resolution_stats['unresolved'] = resolution_stats['total'] - resolution_stats['resolved']
-        resolution_stats['resolution_rate'] = resolution_stats['resolved'] / resolution_stats['total'] * 100
+        resolution_stats['resolution_rate'] = (resolution_stats['resolved'] / resolution_stats['total'] * 100).fillna(0)
         
         return resolution_stats.sort_values('period')
     
