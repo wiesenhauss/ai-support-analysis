@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Product Insights Dashboard
 
@@ -294,22 +295,37 @@ class InsightsDashboard(ttk.Frame):
         tickets_tab = ttk.Frame(self.detail_notebook, padding="10")
         self.detail_notebook.add(tickets_tab, text="Source Tickets")
         
-        self.tickets_tree = ttk.Treeview(tickets_tab, columns=('date', 'sentiment', 'summary'),
+        # Hint label
+        ttk.Label(tickets_tab, text="💡 Double-click a ticket to open in Zendesk", 
+                  font=('Helvetica', 9, 'italic')).pack(anchor='w', pady=(0, 5))
+        
+        tickets_frame = ttk.Frame(tickets_tab)
+        tickets_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.tickets_tree = ttk.Treeview(tickets_frame, columns=('ticket_id', 'date', 'sentiment', 'summary'),
                                          show='headings', height=10)
+        self.tickets_tree.heading('ticket_id', text='Ticket #')
         self.tickets_tree.heading('date', text='Date')
         self.tickets_tree.heading('sentiment', text='Sentiment')
         self.tickets_tree.heading('summary', text='Summary')
         
-        self.tickets_tree.column('date', width=100)
-        self.tickets_tree.column('sentiment', width=80)
-        self.tickets_tree.column('summary', width=300)
+        self.tickets_tree.column('ticket_id', width=90)
+        self.tickets_tree.column('date', width=90)
+        self.tickets_tree.column('sentiment', width=70)
+        self.tickets_tree.column('summary', width=250)
         
-        tickets_scroll = ttk.Scrollbar(tickets_tab, orient=tk.VERTICAL,
+        tickets_scroll = ttk.Scrollbar(tickets_frame, orient=tk.VERTICAL,
                                        command=self.tickets_tree.yview)
         self.tickets_tree.configure(yscrollcommand=tickets_scroll.set)
         
         self.tickets_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tickets_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind double-click to open ticket in browser
+        self.tickets_tree.bind('<Double-1>', self._on_ticket_double_click)
+        
+        # Store ticket URLs for opening
+        self.ticket_urls = {}
         
         # Tab 3: Trend Chart (if matplotlib available)
         if MATPLOTLIB_AVAILABLE:
@@ -436,22 +452,45 @@ class InsightsDashboard(ttk.Frame):
     
     def _load_source_tickets(self, insight: ProductInsight):
         """Load source tickets for the insight."""
-        # Clear current tickets
+        # Clear current tickets and URLs
         for item in self.tickets_tree.get_children():
             self.tickets_tree.delete(item)
+        self.ticket_urls = {}
         
         if not insight.tickets:
             return
         
         for ticket in insight.tickets[:50]:  # Limit to 50
+            # Extract ticket number from URL (e.g., "https://a8c.zendesk.com/agent/tickets/10452479")
+            ticket_url = ticket.ticket_id or ''
+            ticket_num = ticket_url.split('/')[-1] if '/' in ticket_url else ticket_url
+            
             date_str = ticket.created_date.strftime('%Y-%m-%d') if ticket.created_date else 'N/A'
             summary = ticket.detail_summary[:80] + '...' if ticket.detail_summary and len(ticket.detail_summary) > 80 else (ticket.detail_summary or 'N/A')
             
-            self.tickets_tree.insert('', 'end', values=(
+            item_id = self.tickets_tree.insert('', 'end', values=(
+                ticket_num,
                 date_str,
                 ticket.sentiment or 'N/A',
                 summary
             ))
+            
+            # Store URL for this item
+            self.ticket_urls[item_id] = ticket_url
+    
+    def _on_ticket_double_click(self, event):
+        """Handle double-click on a ticket to open in browser."""
+        import webbrowser
+        
+        selection = self.tickets_tree.selection()
+        if selection:
+            item_id = selection[0]
+            url = self.ticket_urls.get(item_id)
+            if url and url.startswith('http'):
+                webbrowser.open(url)
+            else:
+                from tkinter import messagebox
+                messagebox.showinfo("Info", f"No valid URL for this ticket: {url}")
     
     def _draw_trend_chart(self, insight: ProductInsight):
         """Draw trend chart for the insight."""

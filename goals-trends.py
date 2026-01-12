@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 WordPress.com Customer Goals and Objectives Analysis
 by @wiesenhauss

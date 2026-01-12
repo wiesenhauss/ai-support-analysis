@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 WordPress.com CSAT Prediction and Accuracy Analysis
 by @wiesenhauss
