@@ -264,6 +264,7 @@ class AISupportAnalyzerGUI:
         self.analysis_options = {
             'main_analysis': tk.BooleanVar(value=True),
             'data_cleanup': tk.BooleanVar(value=True),
+            'auto_import': tk.BooleanVar(value=True),  # Auto-import to history after analysis
             'predict_csat': tk.BooleanVar(value=True),
             'topic_aggregator': tk.BooleanVar(value=True),
             'csat_trends': tk.BooleanVar(value=True),
@@ -550,6 +551,15 @@ class AISupportAnalyzerGUI:
         
         ttk.Button(button_frame, text="Select All", command=self.select_all_analysis).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(button_frame, text="Deselect All", command=self.deselect_all_analysis).pack(side=tk.LEFT)
+        
+        # Auto-import option
+        ttk.Separator(analysis_frame, orient='horizontal').pack(fill=tk.X, pady=(10, 5))
+        auto_import_cb = ttk.Checkbutton(
+            analysis_frame, 
+            text="📊 Auto-import results to History after analysis completes",
+            variable=self.analysis_options['auto_import']
+        )
+        auto_import_cb.pack(anchor=tk.W)
         
         # Limit Section
         limit_frame = ttk.LabelFrame(main_frame, text="Processing Options", padding="10")
@@ -902,6 +912,10 @@ class AISupportAnalyzerGUI:
                 self.log_queue.put(('log', f'📅 Finished at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'))
                 self.log_queue.put(('log', '📁 Check the output files in this folder'))
                 self.log_queue.put(('log', '=' * 60))
+                
+                # Auto-import to history if enabled
+                if self.analysis_options['auto_import'].get():
+                    self.log_queue.put(('auto_import', self.input_file_dir))
             else:
                 self.log_queue.put(('status', 'Analysis failed ❌'))
                 
@@ -1554,6 +1568,10 @@ class AISupportAnalyzerGUI:
                         if not self._ui_update_pending:
                             self._ui_update_pending = True
                             self.root.after(self._ui_update_throttle_ms, self._flush_pending_ui_update)
+                    
+                elif msg_type == 'auto_import':
+                    # Auto-import analysis results to history
+                    self._perform_auto_import(message)
                     
                 elif msg_type == 'finished':
                     self.finish_analysis()
@@ -2932,6 +2950,59 @@ Here are the records to analyze:
             
             messagebox.showerror("Error", f"Failed to open Talk to Data:\n{error_msg}")
             self.log_message(f"❌ Talk to Data error: {error_msg}")
+    
+    def _perform_auto_import(self, input_dir):
+        """Automatically import analysis results to history after analysis completes."""
+        if not DATA_STORE_AVAILABLE:
+            self.log_message("⚠️  Auto-import skipped: Historical analytics module not available")
+            return
+        
+        try:
+            import glob
+            
+            # Find the most recent analysis output file
+            output_patterns = [
+                "*support-analysis-output*.csv",
+                "*predictive-csat*.csv"
+            ]
+            
+            analysis_files = []
+            for pattern in output_patterns:
+                analysis_files.extend(glob.glob(os.path.join(input_dir, pattern)))
+            
+            if not analysis_files:
+                self.log_message("⚠️  Auto-import skipped: No analysis output files found")
+                return
+            
+            # Get the most recent file
+            analysis_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            file_to_import = analysis_files[0]
+            
+            self.log_message("")
+            self.log_message("📊 Auto-importing results to historical database...")
+            self.log_message(f"   File: {os.path.basename(file_to_import)}")
+            
+            # Get data store instance
+            data_store = get_data_store()
+            
+            # Import CSV
+            stats = data_store.import_csv(file_to_import)
+            
+            # Show results
+            self.log_message("✅ Auto-import completed!")
+            self.log_message(f"   ✨ New tickets imported: {stats['imported']:,}")
+            self.log_message(f"   🔄 Duplicates skipped: {stats['duplicates']:,}")
+            
+            if stats['period_start'] and stats['period_end']:
+                self.log_message(f"   📅 Date range: {stats['period_start']} to {stats['period_end']}")
+            
+            # Get overall database stats
+            db_stats = data_store.get_database_stats()
+            self.log_message(f"   💾 Total tickets in history: {db_stats['total_tickets']:,}")
+            
+        except Exception as e:
+            self.log_message(f"⚠️  Auto-import failed: {str(e)}")
+            # Don't raise - this is a non-critical feature
     
     def import_to_history(self):
         """Import the current analysis results to the historical database."""
