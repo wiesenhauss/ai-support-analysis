@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 AI Support Analyzer - Shared Utilities Module
 by @wiesenhauss
