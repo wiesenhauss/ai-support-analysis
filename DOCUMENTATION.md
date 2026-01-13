@@ -238,7 +238,7 @@ The AI Support Analyzer includes a modern web-based interface as an alternative 
 **Prerequisites:**
 - Python 3.12+
 - Node.js 18+
-- OpenAI API key
+- OpenAI API key 
 
 **1. Start the Backend:**
 
@@ -411,7 +411,6 @@ Each ticket is analyzed and the following fields are extracted:
 - Presales opportunity
 - Site performance issues
 - Theme support
-- User wanted to speak with an agent/human
 - WooCommerce-related
 - SEO
 - Security

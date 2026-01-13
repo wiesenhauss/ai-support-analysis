@@ -368,7 +368,7 @@ Read the entire context, think carefully about the support interaction between t
 - related_to_product: True if negative sentiment comes from product issues (functionality, usability, complexity, feature limitations)
 - related_to_service: True if negative sentiment comes from support service issues (agent interaction, response times, communication quality)
 - ai_feedback: True ONLY if customer explicitly provided feedback about AI support assistant (not just mentions of AI)
-- main_topic: Select from: Account, Creating & editing the site, Domains, Downtime, Email issues, Error on their site, General billing, General plan questions, Hosting, Integrations, Jetpack issues, Monetization, Plan Cancelation/refund request, Plan Downgrade request, Plan Upgrade request, Plugin support, Presales opportunity, Site performance issues, Theme support, User wanted to speak with an agent/human, WooCommerce-related, SEO, Security, Other
+- main_topic: Select from: Account, Creating & editing the site, Domains, Downtime, Email issues, Error on their site, General billing, General plan questions, Hosting, Integrations, Jetpack issues, Monetization, Plan Cancelation/refund request, Plan Downgrade request, Plan Upgrade request, Plugin support, Presales opportunity, Site performance issues, Theme support, WooCommerce-related, SEO, Security, Other
 """
 
 	csat_good = """You are an AI customer support supervisor for Automattic (maker of WordPress.com, Jetpack, WooCommerce, and others). Your goal is to analyze support emails from users that gave us a good CSAT and understand what made their experience positive.
@@ -391,7 +391,7 @@ Read the entire context, think carefully about the support interaction between t
 - related_to_product: True if positive sentiment comes from product satisfaction (features, functionality, usability)
 - related_to_service: True if positive sentiment comes from support service satisfaction (agent interaction, response time)
 - ai_feedback: True ONLY if customer explicitly provided feedback about AI support assistant (not just mentions of AI)
-- main_topic: Select from: Account, Creating & editing the site, Domains, Downtime, Email issues, Error on their site, General billing, General plan questions, Hosting, Integrations, Jetpack issues, Monetization, Plan Cancelation/refund request, Plan Downgrade request, Plan Upgrade request, Plugin support, Presales opportunity, Site performance issues, Theme support, User wanted to speak with an agent/human, WooCommerce-related, SEO, Security, Other
+- main_topic: Select from: Account, Creating & editing the site, Domains, Downtime, Email issues, Error on their site, General billing, General plan questions, Hosting, Integrations, Jetpack issues, Monetization, Plan Cancelation/refund request, Plan Downgrade request, Plan Upgrade request, Plugin support, Presales opportunity, Site performance issues, Theme support, WooCommerce-related, SEO, Security, Other
 """
 
 	csat_missing = """You are an AI customer support supervisor for Automattic (maker of WordPress.com, Jetpack, WooCommerce, and others). Your goal is to analyze support emails and understand the nature of the interaction when no CSAT rating was provided.
@@ -414,7 +414,7 @@ Read the entire context, think carefully about the support interaction between t
 - related_to_product: True if there were product-related issues (functionality, usability, complexity, feature limitations)
 - related_to_service: True if there were support service-related issues (agent interaction, response times, communication quality)
 - ai_feedback: True ONLY if customer explicitly provided feedback about AI support assistant (not just mentions of AI)
-- main_topic: Select from: Account, Creating & editing the site, Domains, Downtime, Email issues, Error on their site, General billing, General plan questions, Hosting, Integrations, Jetpack issues, Monetization, Plan Cancelation/refund request, Plan Downgrade request, Plan Upgrade request, Plugin support, Presales opportunity, Site performance issues, Theme support, User wanted to speak with an agent/human, WooCommerce-related, SEO, Security, Other
+- main_topic: Select from: Account, Creating & editing the site, Domains, Downtime, Email issues, Error on their site, General billing, General plan questions, Hosting, Integrations, Jetpack issues, Monetization, Plan Cancelation/refund request, Plan Downgrade request, Plan Upgrade request, Plugin support, Presales opportunity, Site performance issues, Theme support, WooCommerce-related, SEO, Security, Other
 """
 
 	# Select the appropriate prompt based on CSAT rating
