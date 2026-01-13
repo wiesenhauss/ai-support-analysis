@@ -1,0 +1,31 @@
+# Web Backend Dependencies
+# FastAPI and ASGI server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# Pydantic for data validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# WebSockets
+websockets>=12.0
+
+# OpenAI API
+openai>=1.10.0
+
+# Data processing (also in main requirements.txt)
+pandas>=2.1.0
+numpy>=1.26.0
+
+# Database (also in main requirements.txt)
+sqlalchemy>=2.0.0
+
+# Async HTTP client (optional, for external API calls)
+httpx>=0.26.0
+
+# CORS and security
+python-jose[cryptography]>=3.3.0
+
+# Development
+python-dotenv>=1.0.0

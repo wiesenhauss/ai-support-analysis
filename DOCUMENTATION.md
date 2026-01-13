@@ -12,12 +12,13 @@
 2. [Problem Statement](#problem-statement)
 3. [Architecture](#architecture)
 4. [Core Components](#core-components)
-5. [Data Flow](#data-flow)
-6. [AI Analysis Output Schema](#ai-analysis-output-schema)
-7. [Database Schema](#database-schema)
-8. [Configuration](#configuration)
-9. [Usage Guide](#usage-guide)
-10. [File Reference](#file-reference)
+5. [Web UI](#web-ui)
+6. [Data Flow](#data-flow)
+7. [AI Analysis Output Schema](#ai-analysis-output-schema)
+8. [Database Schema](#database-schema)
+9. [Configuration](#configuration)
+10. [Usage Guide](#usage-guide)
+11. [File Reference](#file-reference)
 
 ---
 
@@ -106,8 +107,10 @@ Customer support teams face several challenges that this tool addresses:
 | AI/ML | OpenAI API (GPT-4.1-mini, GPT-4.1) |
 | Data Processing | Pandas, NumPy |
 | Database | SQLAlchemy + SQLite |
-| GUI | Tkinter (cross-platform) |
-| Visualization | Matplotlib, Seaborn, Plotly |
+| Desktop GUI | Tkinter (cross-platform) |
+| Web Backend | FastAPI, Uvicorn |
+| Web Frontend | React 18, TypeScript, Tailwind CSS |
+| Visualization | Matplotlib, Seaborn, Plotly, Recharts |
 | Distribution | PyInstaller (macOS .app bundle) |
 
 ---
@@ -182,6 +185,139 @@ Natural language data querying:
 - Intelligent column selection based on question analysis
 - Automatic data sampling for large datasets
 - Comprehensive markdown-formatted results
+
+---
+
+## Web UI
+
+The AI Support Analyzer includes a modern web-based interface as an alternative to the desktop GUI. The web UI provides a browser-based experience with interactive dashboards, real-time analysis, and a conversational data exploration interface.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Web Frontend (React + TypeScript)                │
+│   • Dashboard with metrics and charts                               │
+│   • File upload and analysis management                             │
+│   • Interactive data exploration                                    │
+│   • Talk to Data chat interface                                     │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼ (REST API + WebSocket)
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Web Backend (FastAPI + Python)                   │
+│   • /api/analytics - Historical trend data                          │
+│   • /api/insights - Anomaly detection and insights                  │
+│   • /api/analysis - Run and monitor analysis jobs                   │
+│   • /api/data - Import, query, and manage data                      │
+│   • /api/talk - Natural language data querying                      │
+│   • /api/settings - API key and configuration                       │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼ (imports directly)
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Existing Python Modules                          │
+│   analytics_engine.py, insights_engine.py, data_store.py            │
+│   main-analysis-process.py, models.py                               │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Web UI Pages
+
+| Page | Path | Description |
+|------|------|-------------|
+| Dashboard | `/` | Key metrics, sentiment trends, topic charts, critical alerts |
+| Analyze | `/analyze` | Upload CSV files, configure options, monitor progress |
+| Explore | `/explore` | Search and filter tickets with advanced filtering |
+| Insights | `/insights` | AI-generated insights, anomaly detection, recommendations |
+| Talk to Data | `/talk` | Chat interface for natural language data queries |
+| Settings | `/settings` | API key configuration, database management, import history |
+
+### Running the Web UI
+
+**Prerequisites:**
+- Python 3.12+
+- Node.js 18+
+- OpenAI API key
+
+**1. Start the Backend:**
+
+```bash
+cd web/backend
+pip install -r ../requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+The API will be available at `http://localhost:8000` with interactive docs at `http://localhost:8000/api/docs`.
+
+**2. Start the Frontend:**
+
+```bash
+cd web/frontend
+npm install
+npm run dev
+```
+
+The web UI will be available at `http://localhost:5173`.
+
+**3. Configure API Key:**
+
+Navigate to Settings (`/settings`) and enter your OpenAI API key. The key is stored securely in `~/.ai_support_analyzer/web_settings.json`.
+
+### Web API Endpoints
+
+#### Analytics
+- `GET /api/analytics/summary` - Summary statistics for date range
+- `GET /api/analytics/sentiment-trend` - Sentiment over time
+- `GET /api/analytics/topic-distribution` - Topic breakdown
+- `GET /api/analytics/csat-trend` - CSAT satisfaction trend
+- `GET /api/analytics/compare-periods` - Compare two time periods
+
+#### Insights
+- `GET /api/insights/weekly` - Week-over-week insights
+- `GET /api/insights/monthly` - Month-over-month insights
+- `GET /api/insights/anomalies` - Detected anomalies
+- `GET /api/insights/emerging-topics` - Emerging product areas
+
+#### Data Management
+- `GET /api/data/stats` - Database statistics
+- `GET /api/data/batches` - List import batches
+- `POST /api/data/import` - Import analyzed CSV
+- `GET /api/data/tickets` - Query tickets with filters
+- `DELETE /api/data/batches/{id}` - Delete a batch
+
+#### Analysis Jobs
+- `POST /api/analysis/start` - Start new analysis (upload CSV)
+- `GET /api/analysis/{job_id}/status` - Check job progress
+- `DELETE /api/analysis/{job_id}` - Cancel running job
+
+#### Talk to Data
+- `POST /api/talk/question` - Ask a question about data
+- `WebSocket /api/talk/ws` - Real-time conversation
+
+#### Settings
+- `GET /api/settings/api-key/status` - Check API key status
+- `POST /api/settings/api-key` - Save API key
+- `DELETE /api/settings/api-key` - Remove stored API key
+
+### Integration with Existing Code
+
+The web backend does not duplicate any analysis logic. Instead, it imports and wraps the existing Python modules:
+
+```python
+# Example: web/backend/api/routes/analytics.py
+from analytics_engine import get_analytics_engine
+
+@router.get("/summary")
+async def get_summary(start_date: date = None, end_date: date = None):
+    engine = get_analytics_engine()
+    return engine.get_summary_stats(start_date, end_date)
+```
+
+This ensures:
+- **Single source of truth** - Same analysis logic for both GUI and web
+- **Shared database** - Both interfaces read/write to the same SQLite database
+- **Consistent results** - Identical analytics and insights across interfaces
 
 ---
 
@@ -383,13 +519,23 @@ Pre-computed aggregations for fast trending.
 
 ## Usage Guide
 
-### GUI Mode
+### Desktop GUI Mode
 
 1. **Launch** the application (double-click `AI Support Analyzer.app`)
 2. **Enter API key** (stored securely in macOS Keychain)
 3. **Select CSV file** using Browse button
 4. **Choose analyses** to run (all selected by default)
 5. **Click "Start Analysis"** and monitor progress
+
+### Web UI Mode
+
+1. **Start the backend**: `cd web/backend && uvicorn main:app --port 8000`
+2. **Start the frontend**: `cd web/frontend && npm run dev`
+3. **Open browser** to `http://localhost:5173`
+4. **Configure API key** in Settings page (first time only)
+5. **Use the dashboard** to view analytics and insights
+6. **Upload files** in the Analyze page to run new analyses
+7. **Explore data** with filters or use Talk to Data for natural language queries
 
 ### Command Line Mode
 
@@ -460,6 +606,23 @@ python csat-trends.py -file="path/to/analysis_output.csv" -limit=1000
 | `build.bat` | Windows build script |
 | `verify_build.py` | Build verification |
 
+### Web UI Files
+
+| File/Directory | Description |
+|----------------|-------------|
+| `web/backend/main.py` | FastAPI application entry point |
+| `web/backend/api/routes/` | API route handlers (analytics, insights, data, etc.) |
+| `web/backend/core/config.py` | Application settings and configuration |
+| `web/backend/core/security.py` | API key management and validation |
+| `web/backend/schemas/` | Pydantic models for request/response validation |
+| `web/backend/services/analysis_runner.py` | Background job manager for analyses |
+| `web/backend/services/talk_service.py` | Natural language querying service |
+| `web/frontend/src/pages/` | React page components (Dashboard, Analyze, etc.) |
+| `web/frontend/src/components/` | Reusable UI components |
+| `web/frontend/src/api/client.ts` | TypeScript API client |
+| `web/frontend/src/hooks/` | Custom React hooks for data fetching |
+| `web/requirements.txt` | Python dependencies for web backend |
+
 ---
 
 ## Performance Considerations
@@ -476,12 +639,13 @@ python csat-trends.py -file="path/to/analysis_output.csv" -limit=1000
 
 Areas for potential enhancement:
 
-- [ ] Dashboard web interface
+- [x] Dashboard web interface (implemented in `web/`)
 - [ ] Real-time Zendesk integration
 - [ ] Custom AI model fine-tuning
 - [ ] Multi-language support
 - [ ] Advanced visualization exports
 - [ ] Team collaboration features
+- [ ] Packaged web app (standalone .app with embedded server)
 
 ---
 
