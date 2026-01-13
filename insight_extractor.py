@@ -217,7 +217,7 @@ class InsightExtractor:
         try:
             client = get_openai_client(api_key=api_key)
             response = client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model="gpt-4.1",
                 messages=[
                     {"role": "system", "content": "You are a product analyst clustering customer feedback into actionable insights."},
                     {"role": "user", "content": prompt}
