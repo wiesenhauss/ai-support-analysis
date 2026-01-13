@@ -214,6 +214,43 @@ export const api = {
       )
     },
   },
+
+  // Settings endpoints
+  settings: {
+    get: async () => {
+      return handleResponse(await fetch(`${API_BASE}/settings/`))
+    },
+
+    getApiKeyStatus: async () => {
+      return handleResponse(await fetch(`${API_BASE}/settings/api-key/status`))
+    },
+
+    setApiKey: async (apiKey: string) => {
+      return handleResponse(
+        await fetch(`${API_BASE}/settings/api-key`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: apiKey }),
+        })
+      )
+    },
+
+    deleteApiKey: async () => {
+      return handleResponse(
+        await fetch(`${API_BASE}/settings/api-key`, { method: 'DELETE' })
+      )
+    },
+
+    validateApiKey: async (apiKey: string) => {
+      return handleResponse(
+        await fetch(`${API_BASE}/settings/api-key/validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: apiKey }),
+        })
+      )
+    },
+  },
 }
 
 export default api

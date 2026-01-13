@@ -4,7 +4,7 @@ import Alert from '@/components/Alert'
 import LoadingSpinner, { PageLoader } from '@/components/LoadingSpinner'
 import { cn, formatNumber } from '@/lib/utils'
 import api from '@/api/client'
-import { Database, Trash2, Upload, RefreshCw } from 'lucide-react'
+import { Database, Trash2, Upload, RefreshCw, Key, Eye, EyeOff, CheckCircle, XCircle } from 'lucide-react'
 
 interface DatabaseStats {
   total_tickets: number
@@ -28,6 +28,12 @@ interface Batch {
   notes: string | null
 }
 
+interface ApiKeyStatus {
+  configured: boolean
+  masked_key: string | null
+  source: 'settings_file' | 'environment' | 'none'
+}
+
 export default function Settings() {
   const [stats, setStats] = useState<DatabaseStats | null>(null)
   const [batches, setBatches] = useState<Batch[]>([])
@@ -37,6 +43,24 @@ export default function Settings() {
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<string | null>(null)
+
+  // API Key state
+  const [apiKeyStatus, setApiKeyStatus] = useState<ApiKeyStatus | null>(null)
+  const [newApiKey, setNewApiKey] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [savingApiKey, setSavingApiKey] = useState(false)
+  const [validatingApiKey, setValidatingApiKey] = useState(false)
+  const [apiKeyValidation, setApiKeyValidation] = useState<{ valid: boolean; message: string } | null>(null)
+  const [apiKeySuccess, setApiKeySuccess] = useState<string | null>(null)
+
+  const fetchApiKeyStatus = useCallback(async () => {
+    try {
+      const status = await api.settings.getApiKeyStatus() as ApiKeyStatus
+      setApiKeyStatus(status)
+    } catch (err) {
+      console.error('Failed to fetch API key status:', err)
+    }
+  }, [])
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -57,7 +81,61 @@ export default function Settings() {
 
   useEffect(() => {
     fetchData()
-  }, [fetchData])
+    fetchApiKeyStatus()
+  }, [fetchData, fetchApiKeyStatus])
+
+  const handleValidateApiKey = async () => {
+    if (!newApiKey.trim()) return
+
+    setValidatingApiKey(true)
+    setApiKeyValidation(null)
+    try {
+      const result = await api.settings.validateApiKey(newApiKey) as { valid: boolean; message: string }
+      setApiKeyValidation(result)
+    } catch (err) {
+      setApiKeyValidation({
+        valid: false,
+        message: err instanceof Error ? err.message : 'Validation failed'
+      })
+    } finally {
+      setValidatingApiKey(false)
+    }
+  }
+
+  const handleSaveApiKey = async () => {
+    if (!newApiKey.trim()) return
+
+    setSavingApiKey(true)
+    setError(null)
+    setApiKeySuccess(null)
+    try {
+      await api.settings.setApiKey(newApiKey)
+      setApiKeySuccess('API key saved successfully')
+      setNewApiKey('')
+      setApiKeyValidation(null)
+      await fetchApiKeyStatus()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save API key')
+    } finally {
+      setSavingApiKey(false)
+    }
+  }
+
+  const handleDeleteApiKey = async () => {
+    if (!confirm('Are you sure you want to remove the stored API key?')) return
+
+    try {
+      const result = await api.settings.deleteApiKey() as { environment_key_exists: boolean }
+      if (result.environment_key_exists) {
+        setApiKeySuccess('API key removed from settings. Note: An environment variable is still configured.')
+      } else {
+        setApiKeySuccess('API key removed')
+      }
+      await fetchApiKeyStatus()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove API key')
+    }
+  }
 
   const handleDeleteBatch = async (batchId: number) => {
     if (!confirm('Are you sure you want to delete this batch? This cannot be undone.')) {
@@ -120,6 +198,151 @@ export default function Settings() {
       {importResult && (
         <Alert variant="success">{importResult}</Alert>
       )}
+
+      {apiKeySuccess && (
+        <Alert variant="success">{apiKeySuccess}</Alert>
+      )}
+
+      {/* OpenAI API Key Configuration */}
+      <Card>
+        <CardHeader
+          title="OpenAI API Key"
+          description="Configure your OpenAI API key for AI-powered analysis"
+        />
+        
+        {/* Current Status */}
+        {apiKeyStatus && (
+          <div className="mb-6">
+            <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg">
+              <Key className={cn(
+                'w-5 h-5',
+                apiKeyStatus.configured ? 'text-success-500' : 'text-gray-400'
+              )} />
+              <div className="flex-1">
+                {apiKeyStatus.configured ? (
+                  <>
+                    <p className="font-medium text-gray-900">API Key Configured</p>
+                    <p className="text-sm text-gray-500">
+                      {apiKeyStatus.masked_key}
+                      {apiKeyStatus.source === 'environment' && (
+                        <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                          from environment
+                        </span>
+                      )}
+                      {apiKeyStatus.source === 'settings_file' && (
+                        <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+                          from settings
+                        </span>
+                      )}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium text-gray-900">No API Key Configured</p>
+                    <p className="text-sm text-gray-500">
+                      Add your OpenAI API key to enable analysis features
+                    </p>
+                  </>
+                )}
+              </div>
+              {apiKeyStatus.configured && apiKeyStatus.source === 'settings_file' && (
+                <button
+                  onClick={handleDeleteApiKey}
+                  className="btn btn-secondary text-danger-600 hover:bg-danger-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Add/Update API Key */}
+        <div className="space-y-4">
+          <div>
+            <label className="label">
+              {apiKeyStatus?.configured ? 'Update API Key' : 'Enter API Key'}
+            </label>
+            <div className="relative">
+              <input
+                type={showApiKey ? 'text' : 'password'}
+                className="input pr-20"
+                placeholder="sk-proj-..."
+                value={newApiKey}
+                onChange={(e) => {
+                  setNewApiKey(e.target.value)
+                  setApiKeyValidation(null)
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey(!showApiKey)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-gray-600"
+              >
+                {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Get your API key from{' '}
+              <a
+                href="https://platform.openai.com/api-keys"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary-600 hover:underline"
+              >
+                platform.openai.com/api-keys
+              </a>
+            </p>
+          </div>
+
+          {/* Validation Result */}
+          {apiKeyValidation && (
+            <div className={cn(
+              'flex items-center gap-2 p-3 rounded-lg',
+              apiKeyValidation.valid ? 'bg-success-50 text-success-700' : 'bg-danger-50 text-danger-700'
+            )}>
+              {apiKeyValidation.valid ? (
+                <CheckCircle className="w-4 h-4" />
+              ) : (
+                <XCircle className="w-4 h-4" />
+              )}
+              <span className="text-sm">{apiKeyValidation.message}</span>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex gap-3">
+            <button
+              onClick={handleValidateApiKey}
+              disabled={!newApiKey.trim() || validatingApiKey}
+              className="btn btn-secondary"
+            >
+              {validatingApiKey ? (
+                <>
+                  <LoadingSpinner size="sm" className="mr-2" />
+                  Validating...
+                </>
+              ) : (
+                'Validate Key'
+              )}
+            </button>
+            <button
+              onClick={handleSaveApiKey}
+              disabled={!newApiKey.trim() || savingApiKey}
+              className="btn btn-primary"
+            >
+              {savingApiKey ? (
+                <>
+                  <LoadingSpinner size="sm" className="mr-2" />
+                  Saving...
+                </>
+              ) : (
+                'Save API Key'
+              )}
+            </button>
+          </div>
+        </div>
+      </Card>
 
       {/* Database Stats */}
       <Card>
