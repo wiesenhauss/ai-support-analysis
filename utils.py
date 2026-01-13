@@ -384,6 +384,163 @@ def reset_openai_client():
     _client_manager.reset()
 
 
+def _parse_context_length_error(error_message: str) -> tuple:
+    """
+    Parse max and actual token counts from OpenAI context length error.
+    
+    Extracts token counts from error messages like:
+    "This model's maximum context length is 1047576 tokens. 
+     However, your messages resulted in 1340480 tokens."
+    
+    Args:
+        error_message: The error message string from OpenAI
+        
+    Returns:
+        tuple: (max_tokens, actual_tokens) or (None, None) if parsing fails
+    """
+    max_tokens = None
+    actual_tokens = None
+    
+    # Pattern to match "maximum context length is X tokens"
+    max_match = re.search(r'maximum context length is (\d+) tokens', error_message)
+    if max_match:
+        max_tokens = int(max_match.group(1))
+    
+    # Pattern to match "resulted in X tokens"
+    actual_match = re.search(r'resulted in (\d+) tokens', error_message)
+    if actual_match:
+        actual_tokens = int(actual_match.group(1))
+    
+    return max_tokens, actual_tokens
+
+
+def analyze_with_context_retry(
+    df: pd.DataFrame,
+    prepare_func,
+    analyze_func,
+    initial_limit: int = None,
+    safety_margin: float = 0.9,
+    min_rows: int = 100,
+    logger: Optional[logging.Logger] = None
+) -> tuple:
+    """
+    Retry analysis with progressively fewer randomly-sampled rows if context length is exceeded.
+    
+    This function handles the OpenAI context_length_exceeded error by automatically
+    calculating the optimal row reduction based on token counts in the error message,
+    then retrying with a random sample of rows.
+    
+    Args:
+        df: DataFrame containing the data to analyze
+        prepare_func: Function to prepare content for analysis. Should accept (df) or (df, limit).
+                     The function will be called with just (sampled_df) for simplicity.
+        analyze_func: Function to call OpenAI API with prepared content. Should accept (content).
+        initial_limit: Initial number of rows to use (default: all rows in df)
+        safety_margin: Safety buffer when calculating reduction (default: 0.9 = 10% buffer)
+        min_rows: Minimum number of rows before giving up (default: 100)
+        logger: Logger instance for logging retry attempts
+        
+    Returns:
+        tuple: (analysis_result, rows_used) - the analysis result and number of rows used
+        
+    Raises:
+        ValueError: If analysis cannot be completed even with minimum rows
+        Exception: Re-raises any non-context-length errors from OpenAI
+        
+    Example:
+        >>> analysis, rows_used = analyze_with_context_retry(
+        ...     df=df,
+        ...     prepare_func=prepare_content_for_analysis,
+        ...     analyze_func=lambda content: analyze_with_openai(content, custom_prompt),
+        ...     initial_limit=args.limit,
+        ...     logger=logger
+        ... )
+    """
+    if not OPENAI_AVAILABLE:
+        raise ImportError("openai package is not installed. Install with: pip install openai")
+    
+    total_rows = len(df)
+    current_limit = initial_limit if initial_limit else total_rows
+    
+    # Ensure we don't try to sample more rows than exist
+    current_limit = min(current_limit, total_rows)
+    
+    while current_limit >= min_rows:
+        try:
+            # Sample rows randomly if we've reduced from original
+            if current_limit < total_rows:
+                sample_df = df.sample(n=current_limit, random_state=None)
+                if logger:
+                    logger.info(f"Using {current_limit} randomly sampled rows for analysis")
+            else:
+                sample_df = df
+            
+            # Prepare content - pass the sampled DataFrame
+            # The prepare function will process all rows in the sampled df
+            content = prepare_func(sample_df)
+            
+            # Call the analysis function
+            result = analyze_func(content)
+            
+            if logger:
+                logger.info(f"Analysis completed successfully with {current_limit} rows")
+            
+            return result, current_limit
+            
+        except openai.BadRequestError as e:
+            error_str = str(e)
+            if 'context_length_exceeded' in error_str:
+                # Parse token counts from error message for smart reduction
+                max_tokens, actual_tokens = _parse_context_length_error(error_str)
+                
+                previous_limit = current_limit
+                
+                if max_tokens and actual_tokens and actual_tokens > 0:
+                    # Calculate optimal reduction based on token ratio
+                    ratio = (max_tokens / actual_tokens) * safety_margin
+                    current_limit = int(current_limit * ratio)
+                    
+                    if logger:
+                        reduction_pct = int((1 - ratio) * 100)
+                        logger.warning(
+                            f"Context length exceeded ({actual_tokens:,} tokens > {max_tokens:,} max). "
+                            f"Reducing to {current_limit:,} rows ({100 - reduction_pct}% of {previous_limit:,})..."
+                        )
+                else:
+                    # Fallback to 70% reduction if parsing fails
+                    current_limit = int(current_limit * 0.7)
+                    
+                    if logger:
+                        logger.warning(
+                            f"Context length exceeded. Could not parse token counts. "
+                            f"Reducing to {current_limit:,} rows (70% of {previous_limit:,})..."
+                        )
+                
+                # Check if we've hit the minimum
+                if current_limit < min_rows:
+                    if logger:
+                        logger.error(
+                            f"Context length exceeded and cannot reduce below {min_rows} rows. "
+                            f"Analysis cannot be completed."
+                        )
+                    raise ValueError(
+                        f"Analysis failed: context length exceeded even with {previous_limit} rows. "
+                        f"Consider using a smaller dataset or a model with larger context window."
+                    )
+            else:
+                # Re-raise non-context-length errors
+                raise
+        except Exception as e:
+            # Re-raise any other exceptions
+            raise
+    
+    # Should not reach here, but just in case
+    raise ValueError(
+        f"Analysis failed: could not complete analysis with available data. "
+        f"Minimum rows threshold ({min_rows}) reached."
+    )
+
+
 # =============================================================================
 # LOGGING UTILITIES
 # =============================================================================

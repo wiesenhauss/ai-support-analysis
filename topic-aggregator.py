@@ -57,6 +57,7 @@ from utils import (
     normalize_file_path,
     find_column_by_substring,
     get_openai_client,
+    analyze_with_context_retry,
 )
 
 # Set up logging
@@ -253,19 +254,25 @@ def main():
         df = read_csv_data(input_filename)
         logger.info("CSV data loaded successfully")
 
-        # Prepare content for analysis
-        content = prepare_content_for_analysis(df)
-        logger.info("Content prepared for analysis")
-
-        # Get analysis from OpenAI
+        # Get custom prompt if provided
         custom_prompt = args.prompt if args.prompt else None
         if custom_prompt:
             logger.info("Using custom analysis prompt")
         else:
             logger.info("Using default analysis prompt")
+
+        # Use retry mechanism to handle context length exceeded errors
+        # For topic aggregator, sampling reduces the number of rows contributing to topic counts
+        logger.info("Processing all records for topic aggregation")
         
-        analysis = analyze_with_openai(content, custom_prompt)
-        logger.info("OpenAI analysis completed")
+        analysis, rows_used = analyze_with_context_retry(
+            df=df,
+            prepare_func=prepare_content_for_analysis,
+            analyze_func=lambda content: analyze_with_openai(content, custom_prompt),
+            initial_limit=None,  # Process all rows initially
+            logger=logger
+        )
+        logger.info(f"OpenAI analysis completed using {rows_used} rows")
 
         # Generate timestamp-based filename
         current_time = datetime.now()

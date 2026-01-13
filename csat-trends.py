@@ -64,6 +64,7 @@ from utils import (
     find_column_by_substring,
     get_openai_client,
     prepare_records_for_analysis,
+    analyze_with_context_retry,
 )
 
 # Set up logging
@@ -295,24 +296,28 @@ def main():
         df = read_csv_data(input_filename)
         logger.info(f"CSV data loaded successfully from {input_filename}")
 
-        # Prepare content for analysis
-        if args.limit:
-            logger.info(f"Processing limited to {args.limit} records")
-            content = prepare_content_for_analysis(df, args.limit)
-        else:
-            logger.info("Processing all records (no limit specified)")
-            content = prepare_content_for_analysis(df)
-        logger.info("Content prepared for analysis")
-
-        # Get analysis from OpenAI
+        # Get custom prompt if provided
         custom_prompt = args.prompt if args.prompt else None
         if custom_prompt:
             logger.info("Using custom analysis prompt")
         else:
             logger.info("Using default analysis prompt")
+
+        # Use retry mechanism to handle context length exceeded errors
+        # The prepare function is wrapped to not use limit (we pass pre-sampled df instead)
+        if args.limit:
+            logger.info(f"Processing limited to {args.limit} records")
+        else:
+            logger.info("Processing all records (no limit specified)")
         
-        analysis = analyze_with_openai(content, custom_prompt)
-        logger.info("OpenAI analysis completed")
+        analysis, rows_used = analyze_with_context_retry(
+            df=df,
+            prepare_func=lambda sample_df: prepare_content_for_analysis(sample_df),
+            analyze_func=lambda content: analyze_with_openai(content, custom_prompt),
+            initial_limit=args.limit,
+            logger=logger
+        )
+        logger.info(f"OpenAI analysis completed using {rows_used} rows")
 
         # Generate timestamp-based filename
         current_time = datetime.now()
