@@ -354,7 +354,9 @@ class ProductInsightsStore:
         status: InsightStatus = None,
         min_impact: float = None,
         order_by: str = 'impact_score',
-        limit: int = 50
+        limit: int = 50,
+        start_date: date = None,
+        end_date: date = None
     ) -> List[ProductInsight]:
         """
         Query insights with filters.
@@ -366,6 +368,8 @@ class ProductInsightsStore:
             min_impact: Minimum impact score
             order_by: Field to order by
             limit: Maximum number of results
+            start_date: Filter insights seen on or after this date
+            end_date: Filter insights seen on or before this date
             
         Returns:
             List of ProductInsight instances
@@ -387,6 +391,12 @@ class ProductInsightsStore:
             
             if min_impact is not None:
                 query = query.filter(ProductInsight.impact_score >= min_impact)
+            
+            # Date range filtering - filter by last_seen date
+            if start_date:
+                query = query.filter(ProductInsight.last_seen >= start_date)
+            if end_date:
+                query = query.filter(ProductInsight.last_seen <= end_date)
             
             # Ordering
             if order_by == 'impact_score':
