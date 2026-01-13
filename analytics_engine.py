@@ -114,6 +114,8 @@ class AnalyticsEngine:
         """
         Get trend of a specific topic over time.
         
+        Optimized to use SQL aggregations instead of loading full DataFrame.
+        
         Args:
             topic: Topic to track
             granularity: Time granularity ('day', 'week', 'month')
@@ -123,35 +125,74 @@ class AnalyticsEngine:
         Returns:
             DataFrame with columns: period, count, percentage
         """
-        df = self.data_store.get_tickets_dataframe(start_date, end_date)
-        
-        if df.empty:
-            return pd.DataFrame(columns=['period', 'count', 'percentage'])
-        
-        # Filter for topic
-        df['has_topic'] = df['main_topic'].str.contains(topic, case=False, na=False)
-        
-        # Group by time period
-        df['created_date'] = pd.to_datetime(df['created_date'])
-        
-        if granularity == 'day':
-            df['period'] = df['created_date'].dt.date
-        elif granularity == 'week':
-            df['period'] = df['created_date'].dt.to_period('W').apply(lambda x: x.start_time.date())
-        else:  # month
-            df['period'] = df['created_date'].dt.to_period('M').apply(lambda x: x.start_time.date())
-        
-        # Calculate counts per period
-        topic_counts = df[df['has_topic']].groupby('period').size()
-        total_counts = df.groupby('period').size()
-        
-        result = pd.DataFrame({
-            'period': topic_counts.index,
-            'count': topic_counts.values,
-            'percentage': (topic_counts / total_counts * 100).values
-        })
-        
-        return result.sort_values('period')
+        session = self._get_session()
+        try:
+            from sqlalchemy import case
+            
+            # Build date grouping expression based on granularity
+            if granularity == 'day':
+                period_expr = func.date(TicketAnalysis.created_date)
+            elif granularity == 'week':
+                period_expr = func.strftime('%Y-%W', TicketAnalysis.created_date)
+            else:  # month
+                period_expr = func.strftime('%Y-%m', TicketAnalysis.created_date)
+            
+            # Query for topic counts and total counts per period
+            topic_pattern = f'%{topic}%'
+            
+            query = session.query(
+                period_expr.label('period'),
+                func.sum(
+                    case(
+                        (TicketAnalysis.main_topic.like(topic_pattern), 1),
+                        else_=0
+                    )
+                ).label('topic_count'),
+                func.count(TicketAnalysis.id).label('total_count')
+            )
+            
+            if start_date:
+                query = query.filter(TicketAnalysis.created_date >= start_date)
+            if end_date:
+                query = query.filter(TicketAnalysis.created_date <= end_date)
+            
+            query = query.filter(TicketAnalysis.created_date.isnot(None))
+            query = query.group_by(period_expr)
+            query = query.order_by(period_expr)
+            
+            results = query.all()
+            
+            if not results:
+                return pd.DataFrame(columns=['period', 'count', 'percentage'])
+            
+            # Convert to DataFrame
+            data = []
+            for period_val, topic_count, total_count in results:
+                # Convert period string back to date for week/month granularity
+                if granularity == 'week' and period_val:
+                    try:
+                        year, week = period_val.split('-')
+                        # %W expects Monday as first day of week
+                        period_date = datetime.strptime(f'{year}-W{week}-1', '%Y-W%W-%w').date()
+                    except (ValueError, AttributeError):
+                        period_date = period_val
+                elif granularity == 'month' and period_val:
+                    try:
+                        period_date = datetime.strptime(period_val, '%Y-%m').date()
+                    except (ValueError, AttributeError):
+                        period_date = period_val
+                else:
+                    period_date = period_val
+                
+                data.append({
+                    'period': period_date,
+                    'count': topic_count or 0,
+                    'percentage': (topic_count / total_count * 100) if total_count > 0 else 0
+                })
+            
+            return pd.DataFrame(data)
+        finally:
+            session.close()
     
     # ==================== Sentiment Analysis ====================
     
@@ -209,6 +250,8 @@ class AnalyticsEngine:
         """
         Get sentiment trend over time.
         
+        Optimized to use SQL aggregations instead of loading full DataFrame.
+        
         Args:
             granularity: Time granularity ('day', 'week', 'month')
             start_date: Start of date range
@@ -218,53 +261,74 @@ class AnalyticsEngine:
             DataFrame with columns: period, positive, neutral, negative, 
                                    positive_pct, neutral_pct, negative_pct
         """
-        df = self.data_store.get_tickets_dataframe(start_date, end_date)
-        
-        if df.empty:
-            return pd.DataFrame()
-        
-        df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
-        
-        # Filter out rows without valid dates for trend analysis
-        df = df.dropna(subset=['created_date'])
-        
-        if df.empty:
-            return pd.DataFrame()
-        
-        # Group by time period
-        if granularity == 'day':
-            df['period'] = df['created_date'].dt.date
-        elif granularity == 'week':
-            df['period'] = df['created_date'].dt.to_period('W').apply(lambda x: x.start_time.date())
-        else:  # month
-            df['period'] = df['created_date'].dt.to_period('M').apply(lambda x: x.start_time.date())
-        
-        # Pivot sentiment counts
-        sentiment_counts = df.groupby(['period', 'sentiment']).size().unstack(fill_value=0)
-        
-        # Ensure all required sentiment columns exist and keep only those
-        for col in ['Positive', 'Neutral', 'Negative']:
-            if col not in sentiment_counts.columns:
-                sentiment_counts[col] = 0
-        
-        # Keep only the three standard sentiment columns (drop any extras like None, '', etc.)
-        sentiment_counts = sentiment_counts[['Positive', 'Neutral', 'Negative']].copy()
-        
-        # Calculate totals and percentages
-        sentiment_counts['total'] = sentiment_counts.sum(axis=1)
-        sentiment_counts['positive_pct'] = (sentiment_counts['Positive'] / sentiment_counts['total'] * 100).fillna(0)
-        sentiment_counts['neutral_pct'] = (sentiment_counts['Neutral'] / sentiment_counts['total'] * 100).fillna(0)
-        sentiment_counts['negative_pct'] = (sentiment_counts['Negative'] / sentiment_counts['total'] * 100).fillna(0)
-        
-        # Reset index and rename columns explicitly
-        result = sentiment_counts.reset_index()
-        result = result.rename(columns={
-            'Positive': 'positive',
-            'Neutral': 'neutral', 
-            'Negative': 'negative'
-        })
-        
-        return result.sort_values('period')
+        session = self._get_session()
+        try:
+            from sqlalchemy import case
+            
+            # Build date grouping expression based on granularity
+            if granularity == 'day':
+                period_expr = func.date(TicketAnalysis.created_date)
+            elif granularity == 'week':
+                period_expr = func.strftime('%Y-%W', TicketAnalysis.created_date)
+            else:  # month
+                period_expr = func.strftime('%Y-%m', TicketAnalysis.created_date)
+            
+            # Query for sentiment counts per period using SQL CASE expressions
+            query = session.query(
+                period_expr.label('period'),
+                func.sum(case((TicketAnalysis.sentiment == 'Positive', 1), else_=0)).label('positive'),
+                func.sum(case((TicketAnalysis.sentiment == 'Neutral', 1), else_=0)).label('neutral'),
+                func.sum(case((TicketAnalysis.sentiment == 'Negative', 1), else_=0)).label('negative'),
+                func.count(TicketAnalysis.id).label('total')
+            )
+            
+            if start_date:
+                query = query.filter(TicketAnalysis.created_date >= start_date)
+            if end_date:
+                query = query.filter(TicketAnalysis.created_date <= end_date)
+            
+            query = query.filter(TicketAnalysis.created_date.isnot(None))
+            query = query.group_by(period_expr)
+            query = query.order_by(period_expr)
+            
+            results = query.all()
+            
+            if not results:
+                return pd.DataFrame()
+            
+            # Convert to DataFrame
+            data = []
+            for period_val, positive, neutral, negative, total in results:
+                # Convert period string back to date for week/month granularity
+                if granularity == 'week' and period_val:
+                    try:
+                        year, week = period_val.split('-')
+                        period_date = datetime.strptime(f'{year}-W{week}-1', '%Y-W%W-%w').date()
+                    except (ValueError, AttributeError):
+                        period_date = period_val
+                elif granularity == 'month' and period_val:
+                    try:
+                        period_date = datetime.strptime(period_val, '%Y-%m').date()
+                    except (ValueError, AttributeError):
+                        period_date = period_val
+                else:
+                    period_date = period_val
+                
+                total = total or 1  # Avoid division by zero
+                data.append({
+                    'period': period_date,
+                    'positive': positive or 0,
+                    'neutral': neutral or 0,
+                    'negative': negative or 0,
+                    'total': total,
+                    'positive_pct': (positive or 0) / total * 100,
+                    'neutral_pct': (neutral or 0) / total * 100,
+                    'negative_pct': (negative or 0) / total * 100
+                })
+            
+            return pd.DataFrame(data).sort_values('period')
+        finally:
+            session.close()
     
     # ==================== Resolution Analysis ====================
     
@@ -316,6 +380,8 @@ class AnalyticsEngine:
         """
         Get resolution rate trend over time.
         
+        Optimized to use SQL aggregations instead of loading full DataFrame.
+        
         Args:
             granularity: Time granularity ('day', 'week', 'month')
             start_date: Start of date range
@@ -324,50 +390,72 @@ class AnalyticsEngine:
         Returns:
             DataFrame with columns: period, resolved, unresolved, resolution_rate
         """
-        df = self.data_store.get_tickets_dataframe(start_date, end_date)
-        
-        if df.empty:
-            return pd.DataFrame()
-        
-        df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
-        
-        # Filter out rows without valid dates for trend analysis
-        df = df.dropna(subset=['created_date'])
-        
-        if df.empty:
-            return pd.DataFrame()
-        
-        # Convert issue_resolved to numeric (handles 'True'/'False', '1'/'0', True/False, 1/0)
-        def to_numeric_bool(val):
-            if pd.isna(val):
-                return 0
-            if isinstance(val, bool):
-                return 1 if val else 0
-            if isinstance(val, (int, float)):
-                return 1 if val else 0
-            if isinstance(val, str):
-                return 1 if val.lower() in ('true', '1', 'yes') else 0
-            return 0
-        
-        df['issue_resolved_num'] = df['issue_resolved'].apply(to_numeric_bool)
-        
-        # Group by time period
-        if granularity == 'day':
-            df['period'] = df['created_date'].dt.date
-        elif granularity == 'week':
-            df['period'] = df['created_date'].dt.to_period('W').apply(lambda x: x.start_time.date())
-        else:  # month
-            df['period'] = df['created_date'].dt.to_period('M').apply(lambda x: x.start_time.date())
-        
-        # Calculate resolution stats per period
-        resolution_stats = df.groupby('period').agg({
-            'issue_resolved_num': ['sum', 'count']
-        }).reset_index()
-        resolution_stats.columns = ['period', 'resolved', 'total']
-        resolution_stats['unresolved'] = resolution_stats['total'] - resolution_stats['resolved']
-        resolution_stats['resolution_rate'] = (resolution_stats['resolved'] / resolution_stats['total'] * 100).fillna(0)
-        
-        return resolution_stats.sort_values('period')
+        session = self._get_session()
+        try:
+            from sqlalchemy import case
+            
+            # Build date grouping expression based on granularity
+            if granularity == 'day':
+                period_expr = func.date(TicketAnalysis.created_date)
+            elif granularity == 'week':
+                period_expr = func.strftime('%Y-%W', TicketAnalysis.created_date)
+            else:  # month
+                period_expr = func.strftime('%Y-%m', TicketAnalysis.created_date)
+            
+            # Query for resolution counts per period
+            query = session.query(
+                period_expr.label('period'),
+                func.sum(case((TicketAnalysis.issue_resolved == True, 1), else_=0)).label('resolved'),
+                func.count(TicketAnalysis.id).label('total')
+            )
+            
+            if start_date:
+                query = query.filter(TicketAnalysis.created_date >= start_date)
+            if end_date:
+                query = query.filter(TicketAnalysis.created_date <= end_date)
+            
+            query = query.filter(TicketAnalysis.created_date.isnot(None))
+            query = query.group_by(period_expr)
+            query = query.order_by(period_expr)
+            
+            results = query.all()
+            
+            if not results:
+                return pd.DataFrame()
+            
+            # Convert to DataFrame
+            data = []
+            for period_val, resolved, total in results:
+                # Convert period string back to date for week/month granularity
+                if granularity == 'week' and period_val:
+                    try:
+                        year, week = period_val.split('-')
+                        period_date = datetime.strptime(f'{year}-W{week}-1', '%Y-W%W-%w').date()
+                    except (ValueError, AttributeError):
+                        period_date = period_val
+                elif granularity == 'month' and period_val:
+                    try:
+                        period_date = datetime.strptime(period_val, '%Y-%m').date()
+                    except (ValueError, AttributeError):
+                        period_date = period_val
+                else:
+                    period_date = period_val
+                
+                resolved = resolved or 0
+                total = total or 1
+                unresolved = total - resolved
+                
+                data.append({
+                    'period': period_date,
+                    'resolved': resolved,
+                    'total': total,
+                    'unresolved': unresolved,
+                    'resolution_rate': resolved / total * 100
+                })
+            
+            return pd.DataFrame(data).sort_values('period')
+        finally:
+            session.close()
     
     # ==================== CSAT Analysis ====================
     
@@ -428,6 +516,8 @@ class AnalyticsEngine:
         """
         Get CSAT trend over time.
         
+        Optimized to use SQL aggregations instead of loading full DataFrame.
+        
         Args:
             granularity: Time granularity ('day', 'week', 'month')
             start_date: Start of date range
@@ -436,45 +526,75 @@ class AnalyticsEngine:
         Returns:
             DataFrame with columns: period, good, bad, satisfaction_rate
         """
-        df = self.data_store.get_tickets_dataframe(start_date, end_date)
-        
-        if df.empty:
-            return pd.DataFrame()
-        
-        df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
-        
-        # Filter out rows without valid dates for trend analysis
-        df = df.dropna(subset=['created_date'])
-        
-        if df.empty:
-            return pd.DataFrame()
-        
-        # Normalize CSAT rating
-        df['csat_normalized'] = df['csat_rating'].str.lower()
-        
-        # Group by time period
-        if granularity == 'day':
-            df['period'] = df['created_date'].dt.date
-        elif granularity == 'week':
-            df['period'] = df['created_date'].dt.to_period('W').apply(lambda x: x.start_time.date())
-        else:  # month
-            df['period'] = df['created_date'].dt.to_period('M').apply(lambda x: x.start_time.date())
-        
-        # Calculate CSAT stats per period
-        def calc_csat(group):
-            good = (group['csat_normalized'] == 'good').sum()
-            bad = (group['csat_normalized'] == 'bad').sum()
-            rated = good + bad
-            return pd.Series({
-                'good': good,
-                'bad': bad,
-                'rated': rated,
-                'satisfaction_rate': good / rated * 100 if rated > 0 else 0
-            })
-        
-        csat_stats = df.groupby('period').apply(calc_csat).reset_index()
-        
-        return csat_stats.sort_values('period')
+        session = self._get_session()
+        try:
+            from sqlalchemy import case
+            
+            # Build date grouping expression based on granularity
+            if granularity == 'day':
+                period_expr = func.date(TicketAnalysis.created_date)
+            elif granularity == 'week':
+                period_expr = func.strftime('%Y-%W', TicketAnalysis.created_date)
+            else:  # month
+                period_expr = func.strftime('%Y-%m', TicketAnalysis.created_date)
+            
+            # Normalize csat_rating to lowercase for comparison
+            csat_lower = func.lower(TicketAnalysis.csat_rating)
+            
+            # Query for CSAT counts per period
+            query = session.query(
+                period_expr.label('period'),
+                func.sum(case((csat_lower == 'good', 1), else_=0)).label('good'),
+                func.sum(case((csat_lower == 'bad', 1), else_=0)).label('bad')
+            )
+            
+            if start_date:
+                query = query.filter(TicketAnalysis.created_date >= start_date)
+            if end_date:
+                query = query.filter(TicketAnalysis.created_date <= end_date)
+            
+            query = query.filter(TicketAnalysis.created_date.isnot(None))
+            query = query.group_by(period_expr)
+            query = query.order_by(period_expr)
+            
+            results = query.all()
+            
+            if not results:
+                return pd.DataFrame()
+            
+            # Convert to DataFrame
+            data = []
+            for period_val, good, bad in results:
+                # Convert period string back to date for week/month granularity
+                if granularity == 'week' and period_val:
+                    try:
+                        year, week = period_val.split('-')
+                        period_date = datetime.strptime(f'{year}-W{week}-1', '%Y-W%W-%w').date()
+                    except (ValueError, AttributeError):
+                        period_date = period_val
+                elif granularity == 'month' and period_val:
+                    try:
+                        period_date = datetime.strptime(period_val, '%Y-%m').date()
+                    except (ValueError, AttributeError):
+                        period_date = period_val
+                else:
+                    period_date = period_val
+                
+                good = good or 0
+                bad = bad or 0
+                rated = good + bad
+                
+                data.append({
+                    'period': period_date,
+                    'good': good,
+                    'bad': bad,
+                    'rated': rated,
+                    'satisfaction_rate': good / rated * 100 if rated > 0 else 0
+                })
+            
+            return pd.DataFrame(data).sort_values('period')
+        finally:
+            session.close()
     
     # ==================== Period Comparison ====================
     
