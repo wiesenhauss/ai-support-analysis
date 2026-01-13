@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useDashboardStats, useSentimentTrend, useTopicDistribution } from '@/hooks/useDashboard'
 import { useWeeklyInsights } from '@/hooks/useInsights'
 import MetricCard from '@/components/MetricCard'
@@ -5,6 +6,7 @@ import { Card, CardHeader } from '@/components/Card'
 import { PageLoader } from '@/components/LoadingSpinner'
 import Alert from '@/components/Alert'
 import EmptyState from '@/components/EmptyState'
+import DateRangePicker from '@/components/DateRangePicker'
 import { formatNumber, formatPercent } from '@/lib/utils'
 import {
   BarChart,
@@ -26,10 +28,30 @@ import { MessageSquare, ThumbsUp, CheckCircle, AlertTriangle } from 'lucide-reac
 const COLORS = ['#22c55e', '#6b7280', '#ef4444']
 const TOPIC_COLORS = ['#0ea5e9', '#8b5cf6', '#f59e0b', '#ef4444', '#10b981', '#6366f1', '#ec4899', '#14b8a6', '#f97316', '#84cc16']
 
+interface DateRange {
+  startDate: string | undefined
+  endDate: string | undefined
+}
+
 export default function Dashboard() {
-  const { data: stats, loading: statsLoading, error: statsError } = useDashboardStats()
-  const { data: sentimentTrend, loading: trendLoading } = useSentimentTrend('week')
-  const { data: topics, loading: topicsLoading } = useTopicDistribution()
+  const [dateRange, setDateRange] = useState<DateRange>({
+    startDate: undefined,
+    endDate: undefined,
+  })
+
+  const { data: stats, loading: statsLoading, error: statsError } = useDashboardStats(
+    dateRange.startDate,
+    dateRange.endDate
+  )
+  const { data: sentimentTrend, loading: trendLoading } = useSentimentTrend(
+    'week',
+    dateRange.startDate,
+    dateRange.endDate
+  )
+  const { data: topics, loading: topicsLoading } = useTopicDistribution(
+    dateRange.startDate,
+    dateRange.endDate
+  )
   const { data: insights, loading: insightsLoading } = useWeeklyInsights()
 
   if (statsLoading) {
@@ -68,12 +90,15 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 mt-1">
-          Overview of your support analytics
-        </p>
+      {/* Header with Date Range Picker */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-gray-500 mt-1">
+            Overview of your support analytics
+          </p>
+        </div>
+        <DateRangePicker value={dateRange} onChange={setDateRange} />
       </div>
 
       {/* Critical Insights Alert */}
