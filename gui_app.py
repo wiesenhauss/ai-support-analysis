@@ -76,6 +76,7 @@ class SettingsManager:
                     'product_feedback': True,
                     'goals_trends': True,
                     'custom_analysis': False,
+                    'custom_ticket_analysis': False,
                     'visualization': False
                 },
                 "window_geometry": "1000x800",
@@ -85,6 +86,7 @@ class SettingsManager:
                 "templates": {},
                 "user_prompts": {}
             },
+            "custom_ticket_analyses": [],
             "advanced_settings": {
                 "api_timeout": 60,
                 "max_retries": 3,
@@ -235,6 +237,61 @@ class SettingsManager:
         
         return False
     
+    def save_custom_ticket_analyses(self, analyses: list):
+        """Save custom ticket analyses configurations.
+        
+        Args:
+            analyses: List of dicts with keys: name, prompt, result_type, description
+        """
+        settings = self.load_settings()
+        settings["custom_ticket_analyses"] = analyses
+        return self.save_settings(settings)
+    
+    def load_custom_ticket_analyses(self) -> list:
+        """Load custom ticket analyses configurations.
+        
+        Returns:
+            List of dicts with keys: name, prompt, result_type, description
+        """
+        settings = self.load_settings()
+        return settings.get("custom_ticket_analyses", [])
+    
+    def add_custom_ticket_analysis(self, name: str, prompt: str, result_type: str, description: str = ""):
+        """Add a single custom ticket analysis.
+        
+        Args:
+            name: Column name for output (will be prefixed with CUSTOM_)
+            prompt: The AI prompt to evaluate against each ticket
+            result_type: Either "string" or "boolean"
+            description: Optional description
+        """
+        analyses = self.load_custom_ticket_analyses()
+        
+        # Check for duplicate names
+        for analysis in analyses:
+            if analysis.get("name", "").upper() == name.upper():
+                # Update existing
+                analysis["prompt"] = prompt
+                analysis["result_type"] = result_type
+                analysis["description"] = description
+                return self.save_custom_ticket_analyses(analyses)
+        
+        # Add new
+        analyses.append({
+            "name": name,
+            "prompt": prompt,
+            "result_type": result_type,
+            "description": description
+        })
+        
+        return self.save_custom_ticket_analyses(analyses)
+    
+    def delete_custom_ticket_analysis(self, name: str):
+        """Delete a custom ticket analysis by name."""
+        analyses = self.load_custom_ticket_analyses()
+        analyses = [a for a in analyses if a.get("name", "").upper() != name.upper()]
+        return self.save_custom_ticket_analyses(analyses)
+    
     def get_settings_info(self):
         """Get information about the settings storage location."""
         return {
@@ -271,6 +328,7 @@ class AISupportAnalyzerGUI:
             'product_feedback': tk.BooleanVar(value=True),
             'goals_trends': tk.BooleanVar(value=True),
             'custom_analysis': tk.BooleanVar(value=False),
+            'custom_ticket_analysis': tk.BooleanVar(value=False),
             'visualization': tk.BooleanVar(value=False)
         }
         
@@ -489,7 +547,8 @@ class AISupportAnalyzerGUI:
             'csat_trends': 'CSAT Trends Analysis',
             'product_feedback': 'Product Feedback Analysis',
             'goals_trends': 'Customer Goals Analysis',
-            'custom_analysis': 'Custom Analysis (configure below)',
+            'custom_analysis': 'Custom Aggregate Analysis',
+            'custom_ticket_analysis': 'Custom Per-Ticket Analysis',
             'visualization': 'Generate Visualizations'
         }
         
@@ -516,7 +575,7 @@ class AISupportAnalyzerGUI:
             parent = left_frame if i < len(items) // 2 else right_frame
             
             if key == 'custom_analysis':
-                # Special handling for custom analysis
+                # Special handling for custom aggregate analysis
                 custom_frame = ttk.Frame(parent)
                 custom_frame.pack(anchor=tk.W, pady=2, fill=tk.X)
                 
@@ -530,6 +589,24 @@ class AISupportAnalyzerGUI:
                 
                 # Bind checkbox to enable/disable configure button
                 self.analysis_options[key].trace('w', self.on_custom_analysis_toggle)
+            elif key == 'custom_ticket_analysis':
+                # Special handling for custom per-ticket analysis
+                custom_ticket_frame = ttk.Frame(parent)
+                custom_ticket_frame.pack(anchor=tk.W, pady=2, fill=tk.X)
+                
+                cb = ttk.Checkbutton(custom_ticket_frame, text=description, 
+                                    variable=self.analysis_options[key])
+                cb.pack(side=tk.LEFT)
+                
+                self.custom_ticket_config_button = ttk.Button(
+                    custom_ticket_frame, text="Configure", 
+                    command=self.configure_custom_ticket_analyses, 
+                    state=tk.DISABLED
+                )
+                self.custom_ticket_config_button.pack(side=tk.LEFT, padx=(10, 0))
+                
+                # Bind checkbox to enable/disable configure button
+                self.analysis_options[key].trace('w', self.on_custom_ticket_analysis_toggle)
             elif key in self.configurable_analyses:
                 # Configurable analysis with custom prompt support
                 config_frame = ttk.Frame(parent)
@@ -838,12 +915,21 @@ class AISupportAnalyzerGUI:
             messagebox.showerror("Error", "Please select at least one analysis module")
             return
         
-        # Validate custom analysis configuration if selected
+        # Validate custom aggregate analysis configuration if selected
         if self.analysis_options['custom_analysis'].get():
             if not self.custom_prompt.strip() or not self.custom_columns:
-                messagebox.showerror("Custom Analysis Not Configured", 
-                                   "Custom analysis is selected but not properly configured.\n"
+                messagebox.showerror("Custom Aggregate Analysis Not Configured", 
+                                   "Custom aggregate analysis is selected but not properly configured.\n"
                                    "Please click 'Configure' to set up your custom analysis.")
+                return
+        
+        # Validate custom per-ticket analysis configuration if selected
+        if self.analysis_options['custom_ticket_analysis'].get():
+            custom_ticket_analyses = self.settings_manager.load_custom_ticket_analyses()
+            if not custom_ticket_analyses:
+                messagebox.showerror("Custom Per-Ticket Analysis Not Configured", 
+                                   "Custom per-ticket analysis is selected but no analyses are configured.\n"
+                                   "Please click 'Configure' to add at least one custom analysis.")
                 return
         
         # Check if the user is trying to run dependent analyses without core analysis
@@ -1107,12 +1193,12 @@ class AISupportAnalyzerGUI:
                     return False
                 step_counter += 1
             
-            # Custom analysis (if configured)
+            # Custom aggregate analysis (if configured)
             if self.analysis_options['custom_analysis'].get():
                 if not self.custom_prompt.strip() or not self.custom_columns:
-                    self.log_queue.put(('log', "⚠️  Custom analysis skipped - not configured properly"))
+                    self.log_queue.put(('log', "⚠️  Custom aggregate analysis skipped - not configured properly"))
                 else:
-                    self.log_queue.put(('log', f"📋 Step {step_counter}: Running custom analysis..."))
+                    self.log_queue.put(('log', f"📋 Step {step_counter}: Running custom aggregate analysis..."))
                     if self.cancel_requested:
                         self.log_queue.put(('log', "⏹ Analysis cancelled by user"))
                         return False
@@ -1133,7 +1219,54 @@ class AISupportAnalyzerGUI:
                     ] + limit_args
                     
                     if not self.run_python_script("custom-analysis.py", custom_args):
-                        self.log_queue.put(('log', "⚠️  Custom analysis failed, but continuing..."))
+                        self.log_queue.put(('log', "⚠️  Custom aggregate analysis failed, but continuing..."))
+                    step_counter += 1
+            
+            # Custom per-ticket analysis (if configured)
+            if self.analysis_options['custom_ticket_analysis'].get():
+                custom_ticket_analyses = self.settings_manager.load_custom_ticket_analyses()
+                
+                if not custom_ticket_analyses:
+                    self.log_queue.put(('log', "⚠️  Custom per-ticket analysis skipped - no analyses configured"))
+                else:
+                    self.log_queue.put(('log', f"📋 Step {step_counter}: Running custom per-ticket analysis..."))
+                    self.log_queue.put(('log', f"   📊 Processing {len(custom_ticket_analyses)} custom analyses per ticket"))
+                    
+                    if self.cancel_requested:
+                        self.log_queue.put(('log', "⏹ Analysis cancelled by user"))
+                        return False
+                    
+                    # Write config to temp file
+                    import tempfile
+                    config_data = {"analyses": custom_ticket_analyses}
+                    
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as config_file:
+                        json.dump(config_data, config_file)
+                        config_path = config_file.name
+                    
+                    try:
+                        # Build arguments for custom ticket analysis
+                        custom_ticket_args = [
+                            f"-file={current_file}",
+                            f"-config={config_path}"
+                        ]
+                        
+                        if not self.run_python_script("custom_ticket_analysis.py", custom_ticket_args):
+                            self.log_queue.put(('log', "⚠️  Custom per-ticket analysis failed, but continuing..."))
+                        else:
+                            # Find the output file and use it as current file
+                            custom_output = self.find_latest_file("*custom-ticket-analysis-output*.csv", 
+                                                                  search_dir=self.input_file_dir)
+                            if custom_output:
+                                current_file = custom_output
+                                self.log_queue.put(('log', f"   ✅ Custom analysis output: {os.path.basename(custom_output)}"))
+                    finally:
+                        # Clean up temp config file
+                        try:
+                            os.unlink(config_path)
+                        except:
+                            pass
+                    
                     step_counter += 1
             
             # Optional visualization
@@ -2879,6 +3012,297 @@ Here are the records to analyze:
             return [f"-prompt={escaped_prompt}"]
         
         return []
+
+    def on_custom_ticket_analysis_toggle(self, *args):
+        """Enable/disable the configure button when custom ticket analysis is toggled."""
+        if self.analysis_options['custom_ticket_analysis'].get():
+            self.custom_ticket_config_button.config(state=tk.NORMAL)
+        else:
+            self.custom_ticket_config_button.config(state=tk.DISABLED)
+
+    def configure_custom_ticket_analyses(self):
+        """Show dialog to configure custom per-ticket analyses."""
+        # Load existing configurations
+        analyses = self.settings_manager.load_custom_ticket_analyses()
+        
+        # Create configuration dialog
+        config_window = tk.Toplevel(self.root)
+        config_window.title("Configure Custom Per-Ticket Analyses")
+        config_window.geometry("700x600")
+        config_window.transient(self.root)
+        config_window.grab_set()
+        
+        # Position the dialog safely within view
+        self._position_dialog_relative_to_parent(config_window, width=700, height=600)
+        
+        main_frame = ttk.Frame(config_window, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title and description
+        title_label = ttk.Label(main_frame, text="Custom Per-Ticket Analyses", 
+                               font=('Arial', 14, 'bold'))
+        title_label.pack(pady=(0, 5))
+        
+        desc_label = ttk.Label(main_frame, 
+                              text="Define custom AI analyses that run on each ticket.\n"
+                                   "Results are added as new CUSTOM_* columns to the output.",
+                              font=('Arial', 10), foreground='gray', justify=tk.CENTER)
+        desc_label.pack(pady=(0, 15))
+        
+        # List frame for existing analyses
+        list_frame = ttk.LabelFrame(main_frame, text="Configured Analyses", padding="10")
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        # Scrollable listbox
+        list_container = ttk.Frame(list_frame)
+        list_container.pack(fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(list_container)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        analysis_listbox = tk.Listbox(list_container, height=8, font=('Arial', 11),
+                                      yscrollcommand=scrollbar.set, selectmode=tk.SINGLE)
+        analysis_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=analysis_listbox.yview)
+        
+        # Store analyses in a mutable container for the dialog
+        dialog_analyses = list(analyses)
+        
+        def refresh_listbox():
+            """Refresh the listbox with current analyses."""
+            analysis_listbox.delete(0, tk.END)
+            for analysis in dialog_analyses:
+                result_type = analysis.get('result_type', 'string')
+                name = analysis.get('name', 'Unnamed')
+                prompt = analysis.get('prompt', '')[:50]
+                display_text = f"{name} ({result_type}) - \"{prompt}...\""
+                analysis_listbox.insert(tk.END, display_text)
+        
+        refresh_listbox()
+        
+        # Action buttons
+        action_frame = ttk.Frame(list_frame)
+        action_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        def add_analysis():
+            """Show dialog to add a new analysis."""
+            edit_analysis_dialog(None)
+        
+        def edit_analysis():
+            """Edit the selected analysis."""
+            selection = analysis_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select an analysis to edit.")
+                return
+            
+            index = selection[0]
+            edit_analysis_dialog(index)
+        
+        def delete_analysis():
+            """Delete the selected analysis."""
+            selection = analysis_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select an analysis to delete.")
+                return
+            
+            index = selection[0]
+            name = dialog_analyses[index].get('name', 'this analysis')
+            
+            if messagebox.askyesno("Confirm Delete", f"Delete '{name}'?"):
+                del dialog_analyses[index]
+                refresh_listbox()
+        
+        def edit_analysis_dialog(index):
+            """Show dialog to add or edit an analysis."""
+            is_new = index is None
+            
+            if is_new:
+                current_data = {
+                    'name': '',
+                    'prompt': '',
+                    'result_type': 'boolean',
+                    'description': ''
+                }
+            else:
+                current_data = dialog_analyses[index].copy()
+            
+            # Create edit dialog
+            edit_window = tk.Toplevel(config_window)
+            edit_window.title("Add Analysis" if is_new else "Edit Analysis")
+            edit_window.geometry("550x450")
+            edit_window.transient(config_window)
+            edit_window.grab_set()
+            
+            # Position relative to parent
+            self._position_dialog_relative_to_parent(edit_window, config_window, width=550, height=450)
+            
+            edit_frame = ttk.Frame(edit_window, padding="20")
+            edit_frame.pack(fill=tk.BOTH, expand=True)
+            
+            # Name field
+            name_frame = ttk.Frame(edit_frame)
+            name_frame.pack(fill=tk.X, pady=(0, 10))
+            
+            ttk.Label(name_frame, text="Column Name:", font=('Arial', 10, 'bold')).pack(anchor=tk.W)
+            ttk.Label(name_frame, text="Alphanumeric, no spaces. Will be prefixed with CUSTOM_", 
+                     font=('Arial', 9), foreground='gray').pack(anchor=tk.W)
+            
+            name_var = tk.StringVar(value=current_data.get('name', ''))
+            name_entry = ttk.Entry(name_frame, textvariable=name_var, font=('Arial', 11))
+            name_entry.pack(fill=tk.X, pady=(5, 0))
+            
+            # Result type
+            type_frame = ttk.Frame(edit_frame)
+            type_frame.pack(fill=tk.X, pady=(0, 10))
+            
+            ttk.Label(type_frame, text="Result Type:", font=('Arial', 10, 'bold')).pack(anchor=tk.W)
+            
+            type_var = tk.StringVar(value=current_data.get('result_type', 'boolean'))
+            
+            type_buttons_frame = ttk.Frame(type_frame)
+            type_buttons_frame.pack(anchor=tk.W, pady=(5, 0))
+            
+            ttk.Radiobutton(type_buttons_frame, text="Boolean (True/False)", 
+                           variable=type_var, value="boolean").pack(side=tk.LEFT, padx=(0, 20))
+            ttk.Radiobutton(type_buttons_frame, text="String (Text)", 
+                           variable=type_var, value="string").pack(side=tk.LEFT)
+            
+            # Prompt field
+            prompt_frame = ttk.Frame(edit_frame)
+            prompt_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+            
+            ttk.Label(prompt_frame, text="Analysis Prompt:", font=('Arial', 10, 'bold')).pack(anchor=tk.W)
+            ttk.Label(prompt_frame, text="What should the AI determine for each ticket?", 
+                     font=('Arial', 9), foreground='gray').pack(anchor=tk.W)
+            
+            prompt_text = scrolledtext.ScrolledText(prompt_frame, height=6, wrap=tk.WORD, font=('Arial', 11))
+            prompt_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+            prompt_text.insert(tk.END, current_data.get('prompt', ''))
+            
+            # Description field
+            desc_frame = ttk.Frame(edit_frame)
+            desc_frame.pack(fill=tk.X, pady=(0, 15))
+            
+            ttk.Label(desc_frame, text="Description (optional):", font=('Arial', 10, 'bold')).pack(anchor=tk.W)
+            
+            desc_var = tk.StringVar(value=current_data.get('description', ''))
+            desc_entry = ttk.Entry(desc_frame, textvariable=desc_var, font=('Arial', 11))
+            desc_entry.pack(fill=tk.X, pady=(5, 0))
+            
+            # Example prompts
+            example_frame = ttk.LabelFrame(edit_frame, text="Example Prompts", padding="5")
+            example_frame.pack(fill=tk.X, pady=(0, 15))
+            
+            examples = [
+                ("Refund Request", "IS_REFUND_REQUEST", "boolean", 
+                 "Determine if this ticket is a refund or cancellation request."),
+                ("Escalation Needed", "NEEDS_ESCALATION", "boolean", 
+                 "Determine if this ticket requires escalation to a senior agent."),
+                ("Customer Mood", "CUSTOMER_MOOD", "string", 
+                 "Describe the customer's emotional state in 1-2 words."),
+                ("Issue Category", "ISSUE_CATEGORY", "string", 
+                 "Categorize the main issue as: billing, technical, feature, or other.")
+            ]
+            
+            example_buttons_frame = ttk.Frame(example_frame)
+            example_buttons_frame.pack(fill=tk.X)
+            
+            def apply_example(name, result_type, prompt):
+                name_var.set(name)
+                type_var.set(result_type)
+                prompt_text.delete("1.0", tk.END)
+                prompt_text.insert(tk.END, prompt)
+            
+            for label, name, rtype, prompt in examples:
+                btn = ttk.Button(example_buttons_frame, text=label, 
+                               command=lambda n=name, r=rtype, p=prompt: apply_example(n, r, p))
+                btn.pack(side=tk.LEFT, padx=(0, 5), pady=2)
+            
+            # Save/Cancel buttons
+            button_frame = ttk.Frame(edit_frame)
+            button_frame.pack()
+            
+            def save_analysis():
+                name = name_var.get().strip().upper().replace(" ", "_").replace("-", "_")
+                prompt = prompt_text.get("1.0", tk.END).strip()
+                result_type = type_var.get()
+                description = desc_var.get().strip()
+                
+                if not name:
+                    messagebox.showwarning("Missing Name", "Please enter a column name.")
+                    return
+                
+                if not name.replace("_", "").isalnum():
+                    messagebox.showwarning("Invalid Name", 
+                                         "Column name must contain only letters, numbers, and underscores.")
+                    return
+                
+                if not prompt:
+                    messagebox.showwarning("Missing Prompt", "Please enter an analysis prompt.")
+                    return
+                
+                # Check for duplicate names (excluding current if editing)
+                for i, existing in enumerate(dialog_analyses):
+                    if i != index and existing.get('name', '').upper() == name:
+                        messagebox.showwarning("Duplicate Name", 
+                                             f"An analysis named '{name}' already exists.")
+                        return
+                
+                new_analysis = {
+                    'name': name,
+                    'prompt': prompt,
+                    'result_type': result_type,
+                    'description': description
+                }
+                
+                if is_new:
+                    dialog_analyses.append(new_analysis)
+                else:
+                    dialog_analyses[index] = new_analysis
+                
+                refresh_listbox()
+                edit_window.destroy()
+            
+            ttk.Button(button_frame, text="Save", command=save_analysis).pack(side=tk.LEFT, padx=(0, 10))
+            ttk.Button(button_frame, text="Cancel", command=edit_window.destroy).pack(side=tk.LEFT)
+        
+        # Add action buttons
+        ttk.Button(action_frame, text="+ Add Analysis", command=add_analysis).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(action_frame, text="Edit", command=edit_analysis).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(action_frame, text="Delete", command=delete_analysis).pack(side=tk.LEFT)
+        
+        # Info section
+        info_frame = ttk.LabelFrame(main_frame, text="How It Works", padding="10")
+        info_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        info_text = """• Each analysis runs on every ticket during processing
+• Boolean analyses return True/False values
+• String analyses return text responses
+• Results are saved as new columns: CUSTOM_<name>
+• Example: An analysis named "IS_REFUND" creates column "CUSTOM_IS_REFUND" """
+        
+        info_label = ttk.Label(info_frame, text=info_text, justify=tk.LEFT, font=('Arial', 9))
+        info_label.pack(anchor=tk.W)
+        
+        # Main buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=(10, 0))
+        
+        def save_and_close():
+            """Save configurations and close the dialog."""
+            if self.settings_manager.save_custom_ticket_analyses(dialog_analyses):
+                count = len(dialog_analyses)
+                if count > 0:
+                    messagebox.showinfo("Saved", 
+                                       f"Saved {count} custom per-ticket analysis configuration(s).")
+                else:
+                    messagebox.showinfo("Saved", "Custom per-ticket analyses cleared.")
+                config_window.destroy()
+            else:
+                messagebox.showerror("Error", "Failed to save configurations.")
+        
+        ttk.Button(button_frame, text="Save & Close", command=save_and_close).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="Cancel", command=config_window.destroy).pack(side=tk.LEFT)
 
     def update_talk_to_data_button(self, filename):
         """Enable/disable Talk to Data and Import to History buttons based on file validation."""
