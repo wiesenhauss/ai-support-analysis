@@ -29,16 +29,21 @@ Config JSON format:
         "name": "IS_REFUND_REQUEST",
         "prompt": "Determine if this ticket is a refund request",
         "result_type": "boolean",
-        "description": "Identifies refund requests"
+        "description": "Identifies refund requests",
+        "columns": ["Interaction Message Body", "CSAT Comment"]
       },
       {
         "name": "CUSTOMER_MOOD",
         "prompt": "Describe the customer's emotional state in one word",
         "result_type": "string",
-        "description": "Captures customer mood"
+        "description": "Captures customer mood",
+        "columns": ["Interaction Message Body", "CSAT Rating"]
       }
     ]
   }
+
+  Note: The "columns" field is optional. If not specified, default columns
+  (Message Body, CSAT Rating, CSAT Comment) will be used.
 
 Environment Variables:
   OPENAI_API_KEY  Required for AI-powered analysis
@@ -58,7 +63,7 @@ import argparse
 import threading
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import gc
 
 # Import shared utilities
@@ -88,6 +93,7 @@ class CustomAnalysisConfig:
     prompt: str
     result_type: str  # "string" or "boolean"
     description: str = ""
+    columns: List[str] = field(default_factory=list)  # Columns to include in analysis context
     
     @property
     def column_name(self) -> str:
@@ -244,42 +250,42 @@ def read_csv_file(file_path: str) -> pd.DataFrame:
 
 
 def create_custom_prompt(row: dict, analysis: CustomAnalysisConfig, df_attrs: dict = None) -> str:
-    """Create the prompt for a custom analysis."""
-    # Get message body column name
-    message_body_col = df_attrs.get('message_body_column', 'Interaction Message Body') if df_attrs else 'Interaction Message Body'
-    
-    # Get ticket content
-    ticket_body = row.get(message_body_col, "")
-    if pd.isna(ticket_body):
-        ticket_body = ""
-    
-    # Get CSAT info if available
-    csat_rating = row.get('CSAT Rating', row.get('csat_rating', ''))
-    csat_comment = row.get('CSAT Comment', row.get('csat_comment', ''))
-    
-    if pd.isna(csat_rating):
-        csat_rating = ""
-    if pd.isna(csat_comment):
-        csat_comment = ""
-    
-    # Build context
+    """Create the prompt for a custom analysis using selected columns."""
+    # Build context from selected columns
     context_parts = []
-    if ticket_body:
-        context_parts.append(f"Ticket Content:\n{ticket_body}")
-    if csat_rating:
-        context_parts.append(f"CSAT Rating: {csat_rating}")
-    if csat_comment:
-        context_parts.append(f"CSAT Comment: {csat_comment}")
     
-    context = "\n\n".join(context_parts) if context_parts else "No ticket content available."
-    
+    if analysis.columns:
+        # Use user-selected columns
+        for col in analysis.columns:
+            value = row.get(col, "")
+            if value and not pd.isna(value):
+                # Format the value with column name as label
+                context_parts.append(f"{col}:\n{value}")
+    else:
+        # Fallback to default columns if none selected (backwards compatibility)
+        message_body_col = df_attrs.get('message_body_column', 'Interaction Message Body') if df_attrs else 'Interaction Message Body'
+        
+        ticket_body = row.get(message_body_col, "")
+        if ticket_body and not pd.isna(ticket_body):
+            context_parts.append(f"Ticket Content:\n{ticket_body}")
+        
+        csat_rating = row.get('CSAT Rating', row.get('csat_rating', ''))
+        if csat_rating and not pd.isna(csat_rating):
+            context_parts.append(f"CSAT Rating: {csat_rating}")
+        
+        csat_comment = row.get('CSAT Comment', row.get('csat_comment', ''))
+        if csat_comment and not pd.isna(csat_comment):
+            context_parts.append(f"CSAT Comment: {csat_comment}")
+
+    context = "\n\n".join(context_parts) if context_parts else "No data available for selected columns."
+
     # Build the full prompt
     result_instruction = ""
     if analysis.result_type == "boolean":
         result_instruction = "Respond with true or false."
     else:
         result_instruction = "Provide a concise response."
-    
+
     prompt = f"""You are analyzing a customer support ticket. {result_instruction}
 
 ANALYSIS TASK:
@@ -289,7 +295,7 @@ TICKET DATA:
 {context}
 
 Analyze the ticket and provide your response."""
-    
+
     return prompt
 
 
@@ -549,16 +555,17 @@ def load_config(config_path: str) -> List[CustomAnalysisConfig]:
     try:
         with open(config_path, 'r') as f:
             config = json.load(f)
-        
+
         analyses = []
         for item in config.get('analyses', []):
             analyses.append(CustomAnalysisConfig(
                 name=item['name'],
                 prompt=item['prompt'],
                 result_type=item.get('result_type', 'string'),
-                description=item.get('description', '')
+                description=item.get('description', ''),
+                columns=item.get('columns', [])
             ))
-        
+
         return analyses
         
     except Exception as e:

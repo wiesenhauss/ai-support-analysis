@@ -3074,8 +3074,11 @@ Here are the records to analyze:
             for analysis in dialog_analyses:
                 result_type = analysis.get('result_type', 'string')
                 name = analysis.get('name', 'Unnamed')
-                prompt = analysis.get('prompt', '')[:50]
-                display_text = f"{name} ({result_type}) - \"{prompt}...\""
+                prompt = analysis.get('prompt', '')[:40]
+                columns = analysis.get('columns', [])
+                col_count = len(columns)
+                col_info = f"{col_count} cols" if col_count > 0 else "default"
+                display_text = f"{name} ({result_type}, {col_info}) - \"{prompt}...\""
                 analysis_listbox.insert(tk.END, display_text)
         
         refresh_listbox()
@@ -3121,27 +3124,38 @@ Here are the records to analyze:
                     'name': '',
                     'prompt': '',
                     'result_type': 'boolean',
-                    'description': ''
+                    'description': '',
+                    'columns': []
                 }
             else:
                 current_data = dialog_analyses[index].copy()
             
+            # Try to load columns from the selected CSV file
+            available_columns = []
+            if self.input_file_full_path:
+                try:
+                    file_path = self.normalize_file_path(self.input_file_full_path)
+                    df_temp = pd.read_csv(file_path, nrows=1)
+                    available_columns = list(df_temp.columns)
+                except Exception as e:
+                    print(f"Could not load columns from CSV: {e}")
+            
             # Create edit dialog
             edit_window = tk.Toplevel(config_window)
             edit_window.title("Add Analysis" if is_new else "Edit Analysis")
-            edit_window.geometry("550x450")
+            edit_window.geometry("600x700")
             edit_window.transient(config_window)
             edit_window.grab_set()
             
             # Position relative to parent
-            self._position_dialog_relative_to_parent(edit_window, config_window, width=550, height=450)
+            self._position_dialog_relative_to_parent(edit_window, config_window, width=600, height=700)
             
-            edit_frame = ttk.Frame(edit_window, padding="20")
+            edit_frame = ttk.Frame(edit_window, padding="15")
             edit_frame.pack(fill=tk.BOTH, expand=True)
             
             # Name field
             name_frame = ttk.Frame(edit_frame)
-            name_frame.pack(fill=tk.X, pady=(0, 10))
+            name_frame.pack(fill=tk.X, pady=(0, 8))
             
             ttk.Label(name_frame, text="Column Name:", font=('Arial', 10, 'bold')).pack(anchor=tk.W)
             ttk.Label(name_frame, text="Alphanumeric, no spaces. Will be prefixed with CUSTOM_", 
@@ -3149,18 +3163,18 @@ Here are the records to analyze:
             
             name_var = tk.StringVar(value=current_data.get('name', ''))
             name_entry = ttk.Entry(name_frame, textvariable=name_var, font=('Arial', 11))
-            name_entry.pack(fill=tk.X, pady=(5, 0))
+            name_entry.pack(fill=tk.X, pady=(3, 0))
             
             # Result type
             type_frame = ttk.Frame(edit_frame)
-            type_frame.pack(fill=tk.X, pady=(0, 10))
+            type_frame.pack(fill=tk.X, pady=(0, 8))
             
             ttk.Label(type_frame, text="Result Type:", font=('Arial', 10, 'bold')).pack(anchor=tk.W)
             
             type_var = tk.StringVar(value=current_data.get('result_type', 'boolean'))
             
             type_buttons_frame = ttk.Frame(type_frame)
-            type_buttons_frame.pack(anchor=tk.W, pady=(5, 0))
+            type_buttons_frame.pack(anchor=tk.W, pady=(3, 0))
             
             ttk.Radiobutton(type_buttons_frame, text="Boolean (True/False)", 
                            variable=type_var, value="boolean").pack(side=tk.LEFT, padx=(0, 20))
@@ -3169,29 +3183,98 @@ Here are the records to analyze:
             
             # Prompt field
             prompt_frame = ttk.Frame(edit_frame)
-            prompt_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+            prompt_frame.pack(fill=tk.X, pady=(0, 8))
             
             ttk.Label(prompt_frame, text="Analysis Prompt:", font=('Arial', 10, 'bold')).pack(anchor=tk.W)
             ttk.Label(prompt_frame, text="What should the AI determine for each ticket?", 
                      font=('Arial', 9), foreground='gray').pack(anchor=tk.W)
             
-            prompt_text = scrolledtext.ScrolledText(prompt_frame, height=6, wrap=tk.WORD, font=('Arial', 11))
-            prompt_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+            prompt_text = scrolledtext.ScrolledText(prompt_frame, height=4, wrap=tk.WORD, font=('Arial', 11))
+            prompt_text.pack(fill=tk.X, pady=(3, 0))
             prompt_text.insert(tk.END, current_data.get('prompt', ''))
+            
+            # Column selection section
+            columns_frame = ttk.LabelFrame(edit_frame, text="Columns to Include in Analysis", padding="8")
+            columns_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+            
+            if available_columns:
+                ttk.Label(columns_frame, text="Select which CSV columns the AI should analyze:", 
+                         font=('Arial', 9), foreground='gray').pack(anchor=tk.W)
+                
+                # Quick select buttons
+                quick_select_frame = ttk.Frame(columns_frame)
+                quick_select_frame.pack(fill=tk.X, pady=(3, 5))
+                
+                # Scrollable frame for column checkboxes
+                col_canvas = tk.Canvas(columns_frame, height=120)
+                col_scrollbar = ttk.Scrollbar(columns_frame, orient="vertical", command=col_canvas.yview)
+                col_scrollable = ttk.Frame(col_canvas)
+                
+                col_scrollable.bind(
+                    "<Configure>",
+                    lambda e: col_canvas.configure(scrollregion=col_canvas.bbox("all"))
+                )
+                
+                col_canvas.create_window((0, 0), window=col_scrollable, anchor="nw")
+                col_canvas.configure(yscrollcommand=col_scrollbar.set)
+                
+                # Column checkboxes
+                column_vars = {}
+                current_columns = current_data.get('columns', [])
+                
+                for col in available_columns:
+                    var = tk.BooleanVar(value=col in current_columns)
+                    cb = ttk.Checkbutton(col_scrollable, text=col, variable=var)
+                    cb.pack(anchor=tk.W, pady=1)
+                    column_vars[col] = var
+                
+                col_canvas.pack(side="left", fill="both", expand=True)
+                col_scrollbar.pack(side="right", fill="y")
+                
+                # Quick select functions
+                def select_common_columns():
+                    common = ['Interaction Message Body', 'Ticket Message Body', 
+                             'CSAT Rating', 'CSAT Comment', 'CSAT Reason']
+                    for col, var in column_vars.items():
+                        if any(c.lower() in col.lower() for c in common):
+                            var.set(True)
+                
+                def select_all_columns():
+                    for var in column_vars.values():
+                        var.set(True)
+                
+                def clear_all_columns():
+                    for var in column_vars.values():
+                        var.set(False)
+                
+                ttk.Button(quick_select_frame, text="Select Common", 
+                          command=select_common_columns).pack(side=tk.LEFT, padx=(0, 5))
+                ttk.Button(quick_select_frame, text="Select All", 
+                          command=select_all_columns).pack(side=tk.LEFT, padx=(0, 5))
+                ttk.Button(quick_select_frame, text="Clear All", 
+                          command=clear_all_columns).pack(side=tk.LEFT)
+            else:
+                # No file selected - show message
+                no_file_label = ttk.Label(columns_frame, 
+                                         text="⚠️ Select a CSV file first to choose columns.\n"
+                                              "Default columns (Message Body, CSAT) will be used.",
+                                         font=('Arial', 10), foreground='orange', justify=tk.CENTER)
+                no_file_label.pack(pady=20)
+                column_vars = {}
             
             # Description field
             desc_frame = ttk.Frame(edit_frame)
-            desc_frame.pack(fill=tk.X, pady=(0, 15))
+            desc_frame.pack(fill=tk.X, pady=(0, 8))
             
             ttk.Label(desc_frame, text="Description (optional):", font=('Arial', 10, 'bold')).pack(anchor=tk.W)
             
             desc_var = tk.StringVar(value=current_data.get('description', ''))
             desc_entry = ttk.Entry(desc_frame, textvariable=desc_var, font=('Arial', 11))
-            desc_entry.pack(fill=tk.X, pady=(5, 0))
+            desc_entry.pack(fill=tk.X, pady=(3, 0))
             
             # Example prompts
             example_frame = ttk.LabelFrame(edit_frame, text="Example Prompts", padding="5")
-            example_frame.pack(fill=tk.X, pady=(0, 15))
+            example_frame.pack(fill=tk.X, pady=(0, 10))
             
             examples = [
                 ("Refund Request", "IS_REFUND_REQUEST", "boolean", 
@@ -3220,13 +3303,16 @@ Here are the records to analyze:
             
             # Save/Cancel buttons
             button_frame = ttk.Frame(edit_frame)
-            button_frame.pack()
+            button_frame.pack(pady=(5, 0))
             
             def save_analysis():
                 name = name_var.get().strip().upper().replace(" ", "_").replace("-", "_")
                 prompt = prompt_text.get("1.0", tk.END).strip()
                 result_type = type_var.get()
                 description = desc_var.get().strip()
+                
+                # Get selected columns
+                selected_columns = [col for col, var in column_vars.items() if var.get()]
                 
                 if not name:
                     messagebox.showwarning("Missing Name", "Please enter a column name.")
@@ -3241,6 +3327,14 @@ Here are the records to analyze:
                     messagebox.showwarning("Missing Prompt", "Please enter an analysis prompt.")
                     return
                 
+                # Warn if no columns selected (but allow it for backwards compatibility)
+                if available_columns and not selected_columns:
+                    if not messagebox.askyesno("No Columns Selected", 
+                                              "No columns are selected. The analysis will use default columns "
+                                              "(Message Body, CSAT Rating, CSAT Comment).\n\n"
+                                              "Continue anyway?"):
+                        return
+                
                 # Check for duplicate names (excluding current if editing)
                 for i, existing in enumerate(dialog_analyses):
                     if i != index and existing.get('name', '').upper() == name:
@@ -3252,7 +3346,8 @@ Here are the records to analyze:
                     'name': name,
                     'prompt': prompt,
                     'result_type': result_type,
-                    'description': description
+                    'description': description,
+                    'columns': selected_columns
                 }
                 
                 if is_new:
