@@ -17,8 +17,10 @@ Features:
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, date, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from concurrent.futures import ThreadPoolExecutor
 import os
+import threading
 
 # Import matplotlib with Tkinter backend
 import matplotlib
@@ -73,6 +75,12 @@ class HistoryDashboard(ttk.Frame):
         self.analytics_engine = None
         self.insights_engine = None
         
+        # Background loading support
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dashboard")
+        self._loading = False
+        self._loading_lock = threading.Lock()
+        self._insights_loaded = False  # Track if insights have been loaded
+        
         # Initialize data connections
         if ANALYTICS_AVAILABLE:
             try:
@@ -91,11 +99,163 @@ class HistoryDashboard(ttk.Frame):
         self.custom_start_date = tk.StringVar(value="")
         self.custom_end_date = tk.StringVar(value="")
         
-        # Setup UI
+        # Setup UI immediately (fast)
         self._setup_ui()
         
-        # Load initial data
-        self.refresh_dashboard()
+        # Show loading state initially
+        self._show_loading_state()
+        
+        # Load initial data in background
+        self._executor.submit(self._load_data_async)
+    
+    def _show_loading_state(self):
+        """Show loading indicators in UI elements."""
+        for label in self.stats_labels.values():
+            label.config(text="...")
+        self._show_no_data_message("Loading data...")
+        self._display_insights_message("Loading insights...")
+    
+    def _load_data_async(self):
+        """
+        Load all dashboard data in background thread.
+        
+        This method runs in a separate thread to avoid blocking the UI.
+        It pre-fetches all data needed for the dashboard and then
+        schedules UI updates on the main thread.
+        """
+        with self._loading_lock:
+            if self._loading:
+                return  # Already loading
+            self._loading = True
+        
+        try:
+            if not ANALYTICS_AVAILABLE or not self.analytics_engine:
+                self.after(0, self._show_no_data_message)
+                return
+            
+            # Get date range
+            start_date, end_date = self._get_date_range()
+            
+            # Pre-fetch all needed data (runs in background)
+            data = {
+                'stats': self.analytics_engine.get_summary_stats(start_date, end_date),
+                'topics': self.analytics_engine.get_topic_distribution(start_date, end_date, top_n=10),
+                'batches': self.data_store.get_all_batches()[:20] if self.data_store else [],
+            }
+            
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._update_ui_with_data(data, start_date, end_date))
+            
+        except Exception as e:
+            print(f"Error loading dashboard data: {e}")
+            self.after(0, lambda: self._show_error_message(str(e)))
+        finally:
+            with self._loading_lock:
+                self._loading = False
+    
+    def _update_ui_with_data(self, data: Dict[str, Any], start_date, end_date):
+        """
+        Update UI with pre-loaded data. Runs on main thread.
+        
+        Args:
+            data: Dictionary containing pre-fetched data
+            start_date: Start date of the range
+            end_date: End date of the range
+        """
+        try:
+            # Update stats
+            stats = data['stats']
+            self.stats_labels['tickets'].config(text=f"{stats['ticket_count']:,}")
+            self.stats_labels['sentiment'].config(
+                text=f"{stats['sentiment']['positive_pct']:.1f}%"
+            )
+            self.stats_labels['resolution'].config(
+                text=f"{stats['resolution']['resolution_rate']:.1f}%"
+            )
+            self.stats_labels['csat'].config(
+                text=f"{stats['csat']['satisfaction_rate']:.1f}%"
+            )
+            
+            # Draw the current chart based on pre-loaded data or fetch specific trend data
+            chart_type = self.current_chart.get()
+            if chart_type == "topics":
+                self._draw_topics_from_data(data['topics'])
+            else:
+                # For trend charts, we need to fetch the specific trend data
+                self._draw_current_chart(start_date, end_date)
+            
+            # Update batches list
+            self._update_batches_from_data(data['batches'])
+            
+            # Show placeholder for insights (load on demand)
+            if not self._insights_loaded:
+                self._display_insights_message("Click 'Refresh Insights' to load insights.")
+            
+        except Exception as e:
+            print(f"Error updating UI with data: {e}")
+            for label in self.stats_labels.values():
+                label.config(text="--")
+    
+    def _draw_topics_from_data(self, df):
+        """Draw topics chart from pre-loaded DataFrame."""
+        self.ax.clear()
+        
+        try:
+            if df.empty:
+                self._show_no_data_message()
+                return
+            
+            import matplotlib.pyplot as plt
+            
+            # Horizontal bar chart
+            colors = plt.cm.Set3(range(len(df)))
+            bars = self.ax.barh(df['topic'], df['percentage'], color=colors)
+            
+            # Add value labels
+            for bar, pct in zip(bars, df['percentage']):
+                self.ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
+                           f'{pct:.1f}%', va='center', fontsize=9)
+            
+            self.ax.set_xlabel('Percentage (%)', fontsize=10)
+            self.ax.set_title('Top Topics Distribution', fontsize=12, fontweight='bold')
+            self.ax.invert_yaxis()  # Top topic at top
+            
+        except Exception as e:
+            print(f"Error drawing topics chart: {e}")
+            self._show_error_message(str(e))
+        
+        self.canvas.draw()
+    
+    def _draw_current_chart(self, start_date, end_date):
+        """Draw the currently selected chart type."""
+        chart_type = self.current_chart.get()
+        if chart_type == "sentiment":
+            self._draw_sentiment_chart(start_date, end_date)
+        elif chart_type == "topics":
+            self._draw_topics_chart(start_date, end_date)
+        elif chart_type == "resolution":
+            self._draw_resolution_chart(start_date, end_date)
+        elif chart_type == "csat":
+            self._draw_csat_chart(start_date, end_date)
+    
+    def _update_batches_from_data(self, batches: List[Dict[str, Any]]):
+        """Update batches list from pre-loaded data."""
+        # Clear existing items
+        for item in self.batches_tree.get_children():
+            self.batches_tree.delete(item)
+        
+        for batch in batches:
+            import_date = batch['import_date'].strftime('%Y-%m-%d %H:%M') if batch['import_date'] else '--'
+            period = ''
+            if batch['period_start'] and batch['period_end']:
+                period = f"{batch['period_start']} to {batch['period_end']}"
+            
+            self.batches_tree.insert('', 'end', values=(
+                import_date,
+                batch['source_file'],
+                f"{batch['new_tickets']:,}",
+                period
+            ))
     
     def _setup_ui(self):
         """Setup the dashboard UI."""
@@ -456,44 +616,68 @@ class HistoryDashboard(ttk.Frame):
         update_calendar()
     
     def refresh_dashboard(self):
-        """Refresh all dashboard components."""
+        """
+        Refresh all dashboard components.
+        
+        Uses background loading to avoid blocking the UI.
+        """
         if not ANALYTICS_AVAILABLE or not self.analytics_engine:
             self._show_no_data_message()
             return
         
-        start_date, end_date = self._get_date_range()
+        # Show loading state
+        self._show_loading_state()
         
-        # Update statistics
-        self._update_stats(start_date, end_date)
+        # Invalidate cache to get fresh data on manual refresh
+        if hasattr(self.analytics_engine, 'invalidate_cache'):
+            self.analytics_engine.invalidate_cache()
         
-        # Update chart
-        chart_type = self.current_chart.get()
-        if chart_type == "sentiment":
-            self._draw_sentiment_chart(start_date, end_date)
-        elif chart_type == "topics":
-            self._draw_topics_chart(start_date, end_date)
-        elif chart_type == "resolution":
-            self._draw_resolution_chart(start_date, end_date)
-        elif chart_type == "csat":
-            self._draw_csat_chart(start_date, end_date)
-        
-        # Update insights
-        self._refresh_insights()
-        
-        # Update batches list
-        self._update_batches_list()
+        # Load data in background
+        self._executor.submit(self._load_data_async)
     
     def _refresh_insights(self):
-        """Refresh the automated insights panel."""
+        """
+        Refresh the automated insights panel.
+        
+        Uses background loading to avoid blocking the UI.
+        Insights are loaded on-demand when user clicks the refresh button.
+        """
         if not self.insights_engine:
             self._display_insights_message("Insights engine not available")
             return
         
+        # Check if already loading
+        with self._loading_lock:
+            if self._loading:
+                return
+        
+        # Show loading state
+        self._display_insights_message("Generating insights...")
+        self.insights_summary_label.config(text="Loading...")
+        
+        # Load insights in background
+        self._executor.submit(self._load_insights_async)
+    
+    def _load_insights_async(self):
+        """Load insights in background thread."""
         try:
-            # Generate weekly insights
+            # Generate weekly insights (expensive operation)
             insights = self.insights_engine.generate_weekly_insights()
             summary = self.insights_engine.get_insights_summary(insights)
             
+            # Mark insights as loaded
+            self._insights_loaded = True
+            
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._update_insights_ui(insights, summary))
+            
+        except Exception as e:
+            print(f"Error loading insights: {e}")
+            self.after(0, lambda: self._display_insights_message(f"Error: {str(e)}"))
+    
+    def _update_insights_ui(self, insights, summary):
+        """Update insights UI on main thread."""
+        try:
             # Update summary label
             if summary['total'] == 0:
                 self.insights_summary_label.config(
@@ -516,8 +700,8 @@ class HistoryDashboard(ttk.Frame):
             self._display_insights(insights)
             
         except Exception as e:
-            print(f"Error refreshing insights: {e}")
-            self._display_insights_message(f"Error loading insights: {str(e)}")
+            print(f"Error updating insights UI: {e}")
+            self._display_insights_message(f"Error: {str(e)}")
     
     def _display_insights(self, insights):
         """Display insights in the text widget."""

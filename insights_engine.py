@@ -15,6 +15,7 @@ Key Features:
 
 import pandas as pd
 import numpy as np
+import threading
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
@@ -23,10 +24,11 @@ from enum import Enum
 # Try to import analytics modules
 try:
     from data_store import get_data_store, DataStore
-    from analytics_engine import get_analytics_engine, AnalyticsEngine
+    from analytics_engine import get_analytics_engine, AnalyticsEngine, QueryCache
     ANALYTICS_AVAILABLE = True
 except ImportError:
     ANALYTICS_AVAILABLE = False
+    QueryCache = None  # type: ignore
 
 
 class InsightType(Enum):
@@ -86,6 +88,11 @@ class InsightsEngine:
     
     Analyzes historical data to identify significant changes and
     generate actionable recommendations.
+    
+    Features:
+    - Caching of expensive insight calculations
+    - Thread-safe operations
+    - Configurable anomaly thresholds
     """
     
     # Thresholds for anomaly detection
@@ -102,14 +109,34 @@ class InsightsEngine:
         'declining_topic_threshold': -3.0,  # 3% decrease in topic share
     }
     
-    def __init__(self, analytics_engine: Optional[AnalyticsEngine] = None):
+    def __init__(self, analytics_engine: Optional[AnalyticsEngine] = None, cache_ttl: int = 300):
         """
         Initialize the insights engine.
         
         Args:
             analytics_engine: Optional AnalyticsEngine instance. If None, uses singleton.
+            cache_ttl: Cache time-to-live in seconds (default: 300 = 5 minutes)
         """
         self.analytics_engine = analytics_engine or get_analytics_engine()
+        
+        # Initialize cache for expensive insight calculations
+        # Insights change less frequently, so longer TTL is appropriate
+        if QueryCache is not None:
+            self._cache = QueryCache(ttl_seconds=cache_ttl)
+        else:
+            self._cache = None
+    
+    def invalidate_cache(self, pattern: Optional[str] = None) -> None:
+        """
+        Invalidate the insights cache.
+        
+        Call this after data imports to ensure fresh insights are generated.
+        
+        Args:
+            pattern: If provided, only invalidate keys containing this pattern
+        """
+        if self._cache:
+            self._cache.invalidate(pattern)
     
     def _calculate_change(self, current: float, previous: float) -> float:
         """Calculate percentage change between two values."""
@@ -406,17 +433,27 @@ class InsightsEngine:
         """
         Generate insights comparing current week to previous week.
         
+        Results are cached for improved performance on repeated calls.
+
         Returns:
             List of insights for week-over-week comparison
         """
+        # Check cache first (use today's date as cache key)
         today = date.today()
+        cache_key = f"weekly_insights:{today}"
+        
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+        
         current_end = today
         current_start = today - timedelta(days=7)
         previous_end = current_start - timedelta(days=1)
         previous_start = previous_end - timedelta(days=6)
-        
+
         all_insights = []
-        
+
         all_insights.extend(self.detect_sentiment_anomalies(
             current_start, current_end, previous_start, previous_end
         ))
@@ -429,7 +466,7 @@ class InsightsEngine:
         all_insights.extend(self.detect_topic_trends(
             current_start, current_end, previous_start, previous_end
         ))
-        
+
         # Sort by severity (critical first)
         severity_order = {
             InsightSeverity.CRITICAL: 0,
@@ -437,24 +474,38 @@ class InsightsEngine:
             InsightSeverity.INFO: 2
         }
         all_insights.sort(key=lambda x: severity_order[x.severity])
-        
+
+        # Cache the results
+        if self._cache:
+            self._cache.set(cache_key, all_insights)
+
         return all_insights
-    
+
     def generate_monthly_insights(self) -> List[Insight]:
         """
         Generate insights comparing current month to previous month.
         
+        Results are cached for improved performance on repeated calls.
+
         Returns:
             List of insights for month-over-month comparison
         """
+        # Check cache first (use today's date as cache key)
         today = date.today()
+        cache_key = f"monthly_insights:{today}"
+        
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+        
         current_end = today
         current_start = today - timedelta(days=30)
         previous_end = current_start - timedelta(days=1)
         previous_start = previous_end - timedelta(days=29)
-        
+
         all_insights = []
-        
+
         all_insights.extend(self.detect_sentiment_anomalies(
             current_start, current_end, previous_start, previous_end
         ))
@@ -467,7 +518,7 @@ class InsightsEngine:
         all_insights.extend(self.detect_topic_trends(
             current_start, current_end, previous_start, previous_end
         ))
-        
+
         # Sort by severity
         severity_order = {
             InsightSeverity.CRITICAL: 0,
@@ -475,7 +526,11 @@ class InsightsEngine:
             InsightSeverity.INFO: 2
         }
         all_insights.sort(key=lambda x: severity_order[x.severity])
-        
+
+        # Cache the results
+        if self._cache:
+            self._cache.set(cache_key, all_insights)
+
         return all_insights
     
     def compare_periods(

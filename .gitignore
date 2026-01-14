@@ -6,3 +6,9 @@ cursor_does_the_script_process_data_in.md
 .DS_Store
 **/.DS_Store
 web/.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
