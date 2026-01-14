@@ -89,6 +89,7 @@ class SettingsManager:
                 "api_timeout": 60,
                 "max_retries": 3,
                 "batch_size": 100,
+                "concurrent_threads": 50,
                 "temp_directory": ""
             }
         }
@@ -947,6 +948,11 @@ class AISupportAnalyzerGUI:
             current_file = input_file
             step_counter = 1
             
+            # Load advanced settings for concurrent threads
+            settings = self.settings_manager.load_settings()
+            advanced = settings.get("advanced_settings", {})
+            concurrent_threads = advanced.get("concurrent_threads", 50)
+            
             # Check what type of input file we have and what we need to run
             need_core_analysis = self.analysis_options['main_analysis'].get()
             need_data_cleanup = self.analysis_options['data_cleanup'].get()
@@ -996,7 +1002,7 @@ class AISupportAnalyzerGUI:
                     print(f"[DEBUG] Cancelled before main-analysis", flush=True)
                     return False
                 print(f"[DEBUG] About to run main-analysis-process.py with file: {current_file}", flush=True)
-                if not self.run_python_script("main-analysis-process.py", [f"-file={current_file}"]):
+                if not self.run_python_script("main-analysis-process.py", [f"-file={current_file}", f"--threads={concurrent_threads}"]):
                     return False
                 
                 # Aggressive memory cleanup after main analysis (largest memory user)
@@ -2045,14 +2051,28 @@ https://platform.openai.com/api-keys"""
         batch_var = tk.StringVar(value=str(advanced.get("batch_size", 100)))
         ttk.Entry(batch_frame, textvariable=batch_var, width=10).pack(side=tk.RIGHT)
         
+        # Concurrent Threads
+        threads_frame = ttk.Frame(form_frame)
+        threads_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(threads_frame, text="Concurrent Threads:").pack(side=tk.LEFT)
+        threads_var = tk.StringVar(value=str(advanced.get("concurrent_threads", 50)))
+        ttk.Entry(threads_frame, textvariable=threads_var, width=10).pack(side=tk.RIGHT)
+        
         # Save function
         def save_advanced_settings():
             try:
+                threads_value = int(threads_var.get())
+                # Validate threads is between 1 and 100
+                if threads_value < 1 or threads_value > 100:
+                    messagebox.showerror("Error", "Concurrent Threads must be between 1 and 100")
+                    return
+                
                 new_settings = {
                     "advanced_settings": {
                         "api_timeout": int(timeout_var.get()),
                         "max_retries": int(retries_var.get()),
-                        "batch_size": int(batch_var.get())
+                        "batch_size": int(batch_var.get()),
+                        "concurrent_threads": threads_value
                     }
                 }
                 
@@ -2077,6 +2097,7 @@ https://platform.openai.com/api-keys"""
 • API Timeout: How long to wait for OpenAI API responses
 • Max Retries: Number of times to retry failed API calls
 • Batch Size: Number of records to process in each batch
+• Concurrent Threads: Number of parallel threads for AI analysis (1-100)
 
 ⚠️ Changing these settings may affect performance and reliability.
 Use default values unless you know what you're doing."""

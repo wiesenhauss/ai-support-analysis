@@ -509,7 +509,8 @@ Pre-computed aggregations for fast trending.
   "advanced_settings": {
     "api_timeout": 60,
     "max_retries": 3,
-    "batch_size": 100
+    "batch_size": 100,
+    "concurrent_threads": 50
   }
 }
 ```
