@@ -24,6 +24,13 @@ from models import (
     create_tables, get_engine, get_session
 )
 
+# Import product_insights models to register them with Base.metadata
+# This ensures the product_insights table is created when create_tables() is called
+try:
+    from product_insights import ProductInsight, insight_tickets
+except ImportError:
+    pass  # product_insights module not available
+
 
 class DataStore:
     """
@@ -105,14 +112,23 @@ class DataStore:
         return hashlib.sha256(content.encode()).hexdigest()
     
     def _find_column(self, df: pd.DataFrame, possible_names: List[str]) -> Optional[str]:
-        """Find a column by checking multiple possible names."""
+        """Find a column by checking multiple possible names.
+        
+        Handles columns with leading/trailing whitespace (e.g., '     CSAT Rating').
+        """
         for name in possible_names:
+            name_stripped = name.strip().lower()
+            
             # Exact match
             if name in df.columns:
                 return name
-            # Case-insensitive match
+            
             for col in df.columns:
+                # Case-insensitive match
                 if col.lower() == name.lower():
+                    return col
+                # Match after stripping whitespace (handles '     CSAT Rating')
+                if col.strip().lower() == name_stripped:
                     return col
         return None
     
@@ -222,9 +238,9 @@ class DataStore:
             column_map = {
                 'ticket_id': ['Zendesk Ticket URL', 'Ticket ID', 'ticket_id'],
                 'created_date': ['Created Date', 'created_date', 'CREATED_DATE'],
-                'csat_rating': ['CSAT Rating', 'csat_rating'],
-                'csat_reason': ['CSAT Reason', 'csat_reason'],
-                'csat_comment': ['CSAT Comment', 'csat_comment'],
+                'csat_rating': ['CSAT Rating', 'csat_rating', 'CSAT_Rating', 'CSAT', 'Satisfaction Rating', 'satisfaction_rating', 'CSATRating'],
+                'csat_reason': ['CSAT Reason', 'csat_reason', 'CSAT_Reason', 'CSATReason'],
+                'csat_comment': ['CSAT Comment', 'csat_comment', 'CSAT_Comment', 'CSATComment'],
                 'sentiment': ['SENTIMENT_ANALYSIS', 'sentiment_analysis', 'Sentiment'],
                 'issue_resolved': ['ISSUE_RESOLVED', 'issue_resolved'],
                 'main_topic': ['MAIN_TOPIC', 'main_topic'],
@@ -278,7 +294,8 @@ class DataStore:
                         dates.append(ticket.created_date)
                 
                 if resolved_columns['csat_rating']:
-                    ticket.csat_rating = str(row.get(resolved_columns['csat_rating'], ''))[:20] or None
+                    val = row.get(resolved_columns['csat_rating'])
+                    ticket.csat_rating = str(val)[:20] if pd.notna(val) else None
                 
                 if resolved_columns['csat_reason']:
                     val = row.get(resolved_columns['csat_reason'])
@@ -554,15 +571,66 @@ class DataStore:
                 TicketAnalysis.issue_resolved == True
             ).count()
             
+            # CSAT distribution for diagnostics
+            csat_counts = dict(
+                session.query(
+                    TicketAnalysis.csat_rating,
+                    func.count(TicketAnalysis.id)
+                ).group_by(TicketAnalysis.csat_rating).all()
+            )
+            
             return {
                 'total_tickets': total_tickets,
                 'total_batches': total_batches,
                 'date_range_start': date_range[0],
                 'date_range_end': date_range[1],
                 'sentiment_distribution': sentiment_counts,
+                'csat_distribution': csat_counts,
                 'resolution_rate': resolved / total_tickets if total_tickets > 0 else 0,
                 'db_path': self.db_path,
                 'db_size_mb': os.path.getsize(self.db_path) / (1024 * 1024) if os.path.exists(self.db_path) else 0
+            }
+        finally:
+            session.close()
+    
+    def debug_csat_values(self) -> Dict[str, Any]:
+        """
+        Debug method to show unique CSAT values in the database.
+        
+        Returns:
+            Dictionary with CSAT value counts and samples
+        """
+        session = self._get_session()
+        try:
+            from sqlalchemy import func
+            
+            # Get all unique csat_rating values and their counts
+            csat_counts = session.query(
+                TicketAnalysis.csat_rating,
+                func.count(TicketAnalysis.id).label('count')
+            ).group_by(TicketAnalysis.csat_rating).all()
+            
+            # Format results
+            values = {}
+            for rating, count in csat_counts:
+                key = repr(rating) if rating is not None else 'NULL'
+                values[key] = count
+            
+            # Count how many match 'good' or 'bad' patterns
+            good_count = session.query(TicketAnalysis).filter(
+                TicketAnalysis.csat_rating.ilike('%good%')
+            ).count()
+            
+            bad_count = session.query(TicketAnalysis).filter(
+                TicketAnalysis.csat_rating.ilike('%bad%')
+            ).count()
+            
+            return {
+                'unique_values': values,
+                'good_matches': good_count,
+                'bad_matches': bad_count,
+                'total_rated': good_count + bad_count,
+                'message': f"Found {len(values)} unique CSAT values. {good_count} contain 'good', {bad_count} contain 'bad'."
             }
         finally:
             session.close()
