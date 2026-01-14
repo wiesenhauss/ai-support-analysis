@@ -29,6 +29,7 @@ The **AI Support Analyzer** is an AI-powered customer support data analysis tool
 ### Key Capabilities
 
 - **Automated ticket analysis** - AI-powered extraction of sentiment, topics, customer goals, and resolution status
+- **Custom per-ticket analysis** - Define your own AI analyses with custom prompts and result types (string/boolean)
 - **CSAT prediction** - Predict customer satisfaction based on interaction sentiment
 - **Trend detection** - Identify emerging issues, sentiment shifts, and problematic product areas
 - **Product feedback mining** - Extract feature requests, pain points, and product improvement opportunities
@@ -185,6 +186,22 @@ Natural language data querying:
 - Intelligent column selection based on question analysis
 - Automatic data sampling for large datasets
 - Comprehensive markdown-formatted results
+
+### 8. Custom Per-Ticket Analysis (`custom_ticket_analysis.py`)
+
+User-defined AI analysis for each ticket:
+
+- **Multiple custom analyses** - Define as many custom analyses as needed
+- **Two result types** - Boolean (True/False) or String (text) outputs
+- **Concurrent processing** - Processes tickets in parallel like main analysis
+- **Structured outputs** - Uses OpenAI JSON schema for reliable parsing
+- **Custom columns** - Results added as `CUSTOM_*` columns to output CSV
+
+Example use cases:
+- Identify refund requests: `CUSTOM_IS_REFUND_REQUEST` (boolean)
+- Detect escalation needs: `CUSTOM_NEEDS_ESCALATION` (boolean)
+- Classify issue categories: `CUSTOM_ISSUE_CATEGORY` (string)
+- Capture customer mood: `CUSTOM_CUSTOMER_MOOD` (string)
 
 ---
 
@@ -343,6 +360,13 @@ This ensures:
                          │   analysis)      │
                          └────────┬─────────┘
                                   │
+                                  ▼
+                         ┌──────────────────┐
+                         │  Custom Per-     │ (optional)
+                         │  Ticket Analysis │
+                         │  (CUSTOM_* cols) │
+                         └────────┬─────────┘
+                                  │
          ┌────────────────────────┼────────────────────────┐
          │                        │                        │
          ▼                        ▼                        ▼
@@ -415,6 +439,64 @@ Each ticket is analyzed and the following fields are extracted:
 - SEO
 - Security
 - Other
+
+### Custom Per-Ticket Analysis Output
+
+When custom per-ticket analyses are configured, additional columns are added to the output CSV:
+
+| Column Pattern | Type | Description |
+|----------------|------|-------------|
+| `CUSTOM_<NAME>` | boolean or string | Result of custom analysis with the specified name |
+
+**Configuration Structure:**
+
+Each custom analysis is defined with:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `name` | string | Column name suffix (e.g., `IS_REFUND_REQUEST` → `CUSTOM_IS_REFUND_REQUEST`) |
+| `prompt` | string | AI prompt to evaluate against each ticket |
+| `result_type` | enum | `boolean` (True/False) or `string` (text response) |
+| `description` | string | Optional description for UI display |
+| `columns` | array | List of CSV column names to include in the AI context (optional) |
+
+**Column Selection:**
+
+The `columns` field allows you to specify exactly which CSV columns are sent to the AI for analysis. This makes the custom analysis flexible and able to work with any CSV structure:
+
+- If `columns` is specified, only those columns are included in the AI prompt
+- If `columns` is empty or not specified, default columns are used (Message Body, CSAT Rating, CSAT Comment)
+- In the GUI, columns are loaded from the selected CSV file for easy selection
+
+**Example Configurations:**
+
+```json
+{
+  "custom_ticket_analyses": [
+    {
+      "name": "IS_REFUND_REQUEST",
+      "prompt": "Determine if this ticket is a refund or cancellation request.",
+      "result_type": "boolean",
+      "description": "Identifies refund requests",
+      "columns": ["Interaction Message Body", "CSAT Comment"]
+    },
+    {
+      "name": "URGENCY_LEVEL",
+      "prompt": "Rate the urgency of this ticket as: low, medium, high, or critical.",
+      "result_type": "string",
+      "description": "Ticket urgency classification",
+      "columns": ["Interaction Message Body", "CSAT Rating", "CSAT Reason"]
+    },
+    {
+      "name": "SENTIMENT_MATCH",
+      "prompt": "Does the AI sentiment analysis match the CSAT rating? Answer true if they align.",
+      "result_type": "boolean",
+      "description": "Validates sentiment analysis",
+      "columns": ["SENTIMENT_ANALYSIS", "CSAT Rating", "CSAT Comment"]
+    }
+  ]
+}
+```
 
 ---
 
@@ -503,9 +585,11 @@ Pre-computed aggregations for fast trending.
       "product_feedback": true,
       "goals_trends": true,
       "custom_analysis": false,
+      "custom_ticket_analysis": false,
       "visualization": false
     }
   },
+  "custom_ticket_analyses": [],
   "advanced_settings": {
     "api_timeout": 60,
     "max_retries": 3,
@@ -525,6 +609,23 @@ Pre-computed aggregations for fast trending.
 3. **Select CSV file** using Browse button
 4. **Choose analyses** to run (all selected by default)
 5. **Click "Start Analysis"** and monitor progress
+
+#### Using Custom Per-Ticket Analysis (GUI)
+
+1. **Select CSV file first**: Browse and select your input CSV file (required to see available columns)
+2. **Enable the feature**: Check "Custom Per-Ticket Analysis" in the Analysis Modules section
+3. **Click "Configure"**: Opens the configuration dialog
+4. **Add analyses**: Click "+ Add Analysis" to create a new custom analysis
+5. **Configure each analysis**:
+   - **Column Name**: Enter a name (e.g., `IS_REFUND_REQUEST`) - will become `CUSTOM_IS_REFUND_REQUEST`
+   - **Result Type**: Choose Boolean (True/False) or String (text)
+   - **Prompt**: Enter the AI prompt (e.g., "Determine if this ticket is a refund request")
+   - **Columns to Include**: Select which CSV columns the AI should analyze (loaded from your CSV file)
+     - Use "Select Common" for typical columns (Message Body, CSAT fields)
+     - Use "Select All" or manually check specific columns
+   - **Description**: Optional description for reference
+6. **Save & Close**: Your configurations are saved to settings
+7. **Run analysis**: Custom analyses will process after the main analysis
 
 ### Web UI Mode
 
@@ -556,7 +657,42 @@ python topic-aggregator.py -file="path/to/analysis_output.csv"
 
 # CSAT trends analysis
 python csat-trends.py -file="path/to/analysis_output.csv" -limit=1000
+
+# Custom per-ticket analysis
+python custom_ticket_analysis.py -file="path/to/input.csv" -config="path/to/config.json"
+
+# With custom thread count
+python custom_ticket_analysis.py -file="path/to/input.csv" -config="config.json" --threads=25
 ```
+
+#### Custom Per-Ticket Analysis Config File
+
+Create a JSON configuration file with your custom analyses:
+
+```json
+{
+  "analyses": [
+    {
+      "name": "IS_REFUND_REQUEST",
+      "prompt": "Determine if this ticket is a refund or cancellation request.",
+      "result_type": "boolean",
+      "description": "Identifies refund requests",
+      "columns": ["Interaction Message Body", "CSAT Comment"]
+    },
+    {
+      "name": "CUSTOMER_MOOD",
+      "prompt": "Describe the customer's emotional state in 1-2 words (e.g., frustrated, satisfied, confused).",
+      "result_type": "string",
+      "description": "Customer mood classification",
+      "columns": ["Interaction Message Body", "CSAT Rating", "CSAT Reason"]
+    }
+  ]
+}
+```
+
+**Column Selection**: The `columns` array specifies which CSV columns to include in the AI analysis context. If omitted, default columns (Message Body, CSAT Rating, CSAT Comment) are used.
+
+**Output**: Creates `custom-ticket-analysis-output_YYYY-MM-DD_HHhMM.csv` with new `CUSTOM_*` columns.
 
 ### Required CSV Columns
 
@@ -577,6 +713,7 @@ python csat-trends.py -file="path/to/analysis_output.csv" -limit=1000
 |------|-------------|
 | `gui_app.py` | Main GUI application (3000+ lines) |
 | `main-analysis-process.py` | Core AI analysis engine |
+| `custom_ticket_analysis.py` | Custom per-ticket AI analysis with user-defined prompts |
 | `predict_csat.py` | CSAT prediction and accuracy analysis |
 | `csat-trends.py` | CSAT trends and patterns analysis |
 | `topic-aggregator.py` | AI-powered topic categorization |
@@ -590,7 +727,7 @@ python csat-trends.py -file="path/to/analysis_output.csv" -limit=1000
 | `utils.py` | Shared utilities module |
 | `support-data-cleanup.py` | Data cleaning and filtering |
 | `support-data-precleanup.py` | Pre-processing cleanup |
-| `custom-analysis.py` | Custom analysis templates |
+| `custom-analysis.py` | Custom aggregate analysis templates |
 | `visualize-overall-sentiment.py` | Sentiment visualization |
 | `aggregate-daily-reports.py` | Daily report aggregation |
 | `orchestrator.py` | Multi-script orchestration |
@@ -639,6 +776,7 @@ python csat-trends.py -file="path/to/analysis_output.csv" -limit=1000
 Areas for potential enhancement:
 
 - [x] Dashboard web interface (implemented in `web/`)
+- [x] Custom per-ticket analysis (implemented in `custom_ticket_analysis.py`)
 - [ ] Real-time Zendesk integration
 - [ ] Custom AI model fine-tuning
 - [ ] Multi-language support
