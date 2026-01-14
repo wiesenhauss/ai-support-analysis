@@ -19,9 +19,11 @@ from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 
+from sqlalchemy.orm import scoped_session, sessionmaker
+
 from models import (
     Base, AnalysisBatch, TicketAnalysis, TrendSnapshot,
-    create_tables, get_engine, get_session
+    create_tables, get_engine
 )
 
 
@@ -52,13 +54,32 @@ class DataStore:
         # Ensure directory exists
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
-        # Initialize database
+        # Initialize database with optimized engine
         self.engine = get_engine(self.db_path)
         create_tables(self.engine)
         
+        # Use scoped session for thread-safe connection reuse
+        # This allows multiple queries within the same thread to reuse the same session
+        session_factory = sessionmaker(bind=self.engine)
+        self._Session = scoped_session(session_factory)
+        
     def _get_session(self):
-        """Get a new database session."""
-        return get_session(self.engine)
+        """
+        Get a thread-local database session.
+        
+        Sessions are reused within the same thread, improving performance
+        by avoiding repeated connection setup overhead.
+        """
+        return self._Session()
+    
+    def close_session(self):
+        """
+        Remove the current thread-local session.
+        
+        Call this when done with a batch of operations to release
+        the connection back to the pool.
+        """
+        self._Session.remove()
     
     def _compute_ticket_hash(self, row: pd.Series) -> str:
         """

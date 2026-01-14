@@ -16,13 +16,95 @@ Key Features:
 
 import pandas as pd
 import numpy as np
+import threading
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
-from sqlalchemy import func, and_, or_
+from sqlalchemy import func, and_, or_, case
 
-from models import AnalysisBatch, TicketAnalysis, TrendSnapshot, get_engine, get_session
+from models import AnalysisBatch, TicketAnalysis, TrendSnapshot, get_engine
 from data_store import get_data_store
+
+
+class QueryCache:
+    """
+    Thread-safe TTL cache for database query results.
+    
+    Provides in-memory caching with automatic expiration to reduce
+    database load for frequently accessed data.
+    """
+    
+    def __init__(self, ttl_seconds: int = 60):
+        """
+        Initialize the query cache.
+        
+        Args:
+            ttl_seconds: Time-to-live in seconds for cached values (default: 60)
+        """
+        self._cache: Dict[str, Tuple[Any, datetime]] = {}
+        self._ttl = timedelta(seconds=ttl_seconds)
+        self._lock = threading.Lock()
+    
+    def get(self, key: str) -> Optional[Any]:
+        """
+        Get a cached value if it exists and hasn't expired.
+        
+        Args:
+            key: Cache key to look up
+            
+        Returns:
+            Cached value if valid, None otherwise
+        """
+        with self._lock:
+            if key in self._cache:
+                value, timestamp = self._cache[key]
+                if datetime.now() - timestamp < self._ttl:
+                    return value
+                # Expired, remove it
+                del self._cache[key]
+        return None
+    
+    def set(self, key: str, value: Any) -> None:
+        """
+        Store a value in the cache.
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+        """
+        with self._lock:
+            self._cache[key] = (value, datetime.now())
+    
+    def invalidate(self, pattern: Optional[str] = None) -> None:
+        """
+        Invalidate cached entries.
+        
+        Args:
+            pattern: If provided, only invalidate keys containing this pattern.
+                    If None, clear the entire cache.
+        """
+        with self._lock:
+            if pattern:
+                self._cache = {k: v for k, v in self._cache.items() if pattern not in k}
+            else:
+                self._cache.clear()
+    
+    def _make_key(self, method_name: str, *args, **kwargs) -> str:
+        """
+        Generate a cache key from method name and arguments.
+        
+        Args:
+            method_name: Name of the method being cached
+            args: Positional arguments
+            kwargs: Keyword arguments
+            
+        Returns:
+            String cache key
+        """
+        parts = [method_name]
+        parts.extend(str(arg) for arg in args)
+        parts.extend(f"{k}={v}" for k, v in sorted(kwargs.items()))
+        return ":".join(parts)
 
 
 class AnalyticsEngine:
@@ -31,21 +113,40 @@ class AnalyticsEngine:
     
     Provides methods for trend analysis, comparisons, and aggregations
     that power the dashboard visualizations and insights.
+    
+    Features:
+    - Query caching with TTL for improved performance
+    - Optimized aggregation queries
+    - Thread-safe operations
     """
     
-    def __init__(self, data_store=None):
+    def __init__(self, data_store=None, cache_ttl: int = 60):
         """
         Initialize the analytics engine.
         
         Args:
             data_store: Optional DataStore instance. If None, uses singleton.
+            cache_ttl: Cache time-to-live in seconds (default: 60)
         """
         self.data_store = data_store or get_data_store()
         self.engine = self.data_store.engine
+        self._cache = QueryCache(ttl_seconds=cache_ttl)
     
     def _get_session(self):
-        """Get a new database session."""
-        return get_session(self.engine)
+        """Get a thread-local database session from the data store."""
+        return self.data_store._get_session()
+    
+    def invalidate_cache(self, pattern: Optional[str] = None) -> None:
+        """
+        Invalidate the query cache.
+        
+        Call this after data imports or modifications to ensure
+        fresh data is returned.
+        
+        Args:
+            pattern: If provided, only invalidate keys containing this pattern
+        """
+        self._cache.invalidate(pattern)
     
     # ==================== Topic Analysis ====================
     
@@ -58,6 +159,8 @@ class AnalyticsEngine:
         """
         Get distribution of main topics within a date range.
         
+        Results are cached for improved performance on repeated calls.
+        
         Args:
             start_date: Start of date range (inclusive)
             end_date: End of date range (inclusive)
@@ -66,6 +169,12 @@ class AnalyticsEngine:
         Returns:
             DataFrame with columns: topic, count, percentage
         """
+        # Check cache first
+        cache_key = self._cache._make_key('topic_distribution', start_date, end_date, top_n=top_n)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
         session = self._get_session()
         try:
             query = session.query(
@@ -100,9 +209,11 @@ class AnalyticsEngine:
                     'percentage': (count / total * 100) if total > 0 else 0
                 })
             
-            return pd.DataFrame(data)
+            result = pd.DataFrame(data)
+            self._cache.set(cache_key, result)
+            return result
         finally:
-            session.close()
+            pass  # Session managed by scoped_session
     
     def get_topic_trend(
         self,
@@ -127,8 +238,6 @@ class AnalyticsEngine:
         """
         session = self._get_session()
         try:
-            from sqlalchemy import case
-            
             # Build date grouping expression based on granularity
             if granularity == 'day':
                 period_expr = func.date(TicketAnalysis.created_date)
@@ -204,6 +313,8 @@ class AnalyticsEngine:
         """
         Get sentiment distribution within a date range.
         
+        Results are cached for improved performance on repeated calls.
+        
         Args:
             start_date: Start of date range
             end_date: End of date range
@@ -211,6 +322,12 @@ class AnalyticsEngine:
         Returns:
             Dictionary with sentiment counts and percentages
         """
+        # Check cache first
+        cache_key = self._cache._make_key('sentiment_distribution', start_date, end_date)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
         session = self._get_session()
         try:
             query = session.query(
@@ -229,7 +346,7 @@ class AnalyticsEngine:
             results = dict(query.all())
             total = sum(results.values())
             
-            return {
+            result = {
                 'positive': results.get('Positive', 0),
                 'neutral': results.get('Neutral', 0),
                 'negative': results.get('Negative', 0),
@@ -238,8 +355,10 @@ class AnalyticsEngine:
                 'neutral_pct': results.get('Neutral', 0) / total * 100 if total > 0 else 0,
                 'negative_pct': results.get('Negative', 0) / total * 100 if total > 0 else 0,
             }
+            self._cache.set(cache_key, result)
+            return result
         finally:
-            session.close()
+            pass  # Session managed by scoped_session
     
     def get_sentiment_trend(
         self,
@@ -263,8 +382,6 @@ class AnalyticsEngine:
         """
         session = self._get_session()
         try:
-            from sqlalchemy import case
-            
             # Build date grouping expression based on granularity
             if granularity == 'day':
                 period_expr = func.date(TicketAnalysis.created_date)
@@ -340,6 +457,8 @@ class AnalyticsEngine:
         """
         Get issue resolution rate within a date range.
         
+        Results are cached for improved performance on repeated calls.
+        
         Args:
             start_date: Start of date range
             end_date: End of date range
@@ -347,6 +466,12 @@ class AnalyticsEngine:
         Returns:
             Dictionary with resolution statistics
         """
+        # Check cache first
+        cache_key = self._cache._make_key('resolution_rate', start_date, end_date)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
         session = self._get_session()
         try:
             query = session.query(TicketAnalysis)
@@ -361,15 +486,17 @@ class AnalyticsEngine:
             unresolved = query.filter(TicketAnalysis.issue_resolved == False).count()
             unknown = total - resolved - unresolved
             
-            return {
+            result = {
                 'total': total,
                 'resolved': resolved,
                 'unresolved': unresolved,
                 'unknown': unknown,
                 'resolution_rate': resolved / total * 100 if total > 0 else 0
             }
+            self._cache.set(cache_key, result)
+            return result
         finally:
-            session.close()
+            pass  # Session managed by scoped_session
     
     def get_resolution_trend(
         self,
@@ -392,8 +519,6 @@ class AnalyticsEngine:
         """
         session = self._get_session()
         try:
-            from sqlalchemy import case
-            
             # Build date grouping expression based on granularity
             if granularity == 'day':
                 period_expr = func.date(TicketAnalysis.created_date)
@@ -467,6 +592,8 @@ class AnalyticsEngine:
         """
         Get CSAT rating distribution within a date range.
         
+        Results are cached for improved performance on repeated calls.
+        
         Args:
             start_date: Start of date range
             end_date: End of date range
@@ -474,6 +601,12 @@ class AnalyticsEngine:
         Returns:
             Dictionary with CSAT statistics
         """
+        # Check cache first
+        cache_key = self._cache._make_key('csat_distribution', start_date, end_date)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
         session = self._get_session()
         try:
             query = session.query(
@@ -496,7 +629,7 @@ class AnalyticsEngine:
             total = good + bad + no_rating
             rated = good + bad
             
-            return {
+            result = {
                 'good': good,
                 'bad': bad,
                 'no_rating': no_rating,
@@ -504,8 +637,10 @@ class AnalyticsEngine:
                 'response_rate': rated / total * 100 if total > 0 else 0,
                 'satisfaction_rate': good / rated * 100 if rated > 0 else 0
             }
+            self._cache.set(cache_key, result)
+            return result
         finally:
-            session.close()
+            pass  # Session managed by scoped_session
     
     def get_csat_trend(
         self,
@@ -528,8 +663,6 @@ class AnalyticsEngine:
         """
         session = self._get_session()
         try:
-            from sqlalchemy import case
-            
             # Build date grouping expression based on granularity
             if granularity == 'day':
                 period_expr = func.date(TicketAnalysis.created_date)
@@ -673,6 +806,9 @@ class AnalyticsEngine:
         """
         Get comprehensive summary statistics for a date range.
         
+        OPTIMIZED: Combines multiple queries into a single database call
+        for much faster performance. Reduces ~7 queries to 1 query.
+        
         Args:
             start_date: Start of date range
             end_date: End of date range
@@ -680,37 +816,102 @@ class AnalyticsEngine:
         Returns:
             Dictionary with all key metrics
         """
-        sentiment = self.get_sentiment_distribution(start_date, end_date)
-        resolution = self.get_resolution_rate(start_date, end_date)
-        csat = self.get_csat_distribution(start_date, end_date)
-        topics = self.get_topic_distribution(start_date, end_date, top_n=10)
-        
-        # Get product vs service related counts
         session = self._get_session()
         try:
-            query = session.query(TicketAnalysis)
+            # Normalize csat_rating to lowercase for comparison
+            csat_lower = func.lower(TicketAnalysis.csat_rating)
+            
+            # Single optimized query with all aggregations
+            query = session.query(
+                # Total count
+                func.count(TicketAnalysis.id).label('total'),
+                # Sentiment counts
+                func.sum(case((TicketAnalysis.sentiment == 'Positive', 1), else_=0)).label('positive'),
+                func.sum(case((TicketAnalysis.sentiment == 'Neutral', 1), else_=0)).label('neutral'),
+                func.sum(case((TicketAnalysis.sentiment == 'Negative', 1), else_=0)).label('negative'),
+                # Sentiment with non-null values for percentage calculation
+                func.sum(case((TicketAnalysis.sentiment.isnot(None), 1), else_=0)).label('sentiment_total'),
+                # Resolution counts
+                func.sum(case((TicketAnalysis.issue_resolved == True, 1), else_=0)).label('resolved'),
+                func.sum(case((TicketAnalysis.issue_resolved == False, 1), else_=0)).label('unresolved'),
+                # CSAT counts
+                func.sum(case((csat_lower == 'good', 1), else_=0)).label('csat_good'),
+                func.sum(case((csat_lower == 'bad', 1), else_=0)).label('csat_bad'),
+                # Related counts
+                func.sum(case((TicketAnalysis.related_to_product == True, 1), else_=0)).label('product_related'),
+                func.sum(case((TicketAnalysis.related_to_service == True, 1), else_=0)).label('service_related'),
+                func.sum(case((TicketAnalysis.ai_feedback == True, 1), else_=0)).label('ai_feedback'),
+            )
             
             if start_date:
                 query = query.filter(TicketAnalysis.created_date >= start_date)
             if end_date:
                 query = query.filter(TicketAnalysis.created_date <= end_date)
             
-            product_related = query.filter(TicketAnalysis.related_to_product == True).count()
-            service_related = query.filter(TicketAnalysis.related_to_service == True).count()
-            ai_feedback_count = query.filter(TicketAnalysis.ai_feedback == True).count()
+            result = query.first()
+            
+            # Extract values with defaults
+            total = result.total or 0
+            positive = result.positive or 0
+            neutral = result.neutral or 0
+            negative = result.negative or 0
+            sentiment_total = result.sentiment_total or 0
+            resolved = result.resolved or 0
+            unresolved = result.unresolved or 0
+            csat_good = result.csat_good or 0
+            csat_bad = result.csat_bad or 0
+            product_related = result.product_related or 0
+            service_related = result.service_related or 0
+            ai_feedback_count = result.ai_feedback or 0
+            
+            # Calculate derived values
+            csat_rated = csat_good + csat_bad
+            csat_no_rating = total - csat_rated
+            resolution_unknown = total - resolved - unresolved
+            
+            # Build response matching the original format
+            sentiment_data = {
+                'positive': positive,
+                'neutral': neutral,
+                'negative': negative,
+                'total': sentiment_total,
+                'positive_pct': (positive / sentiment_total * 100) if sentiment_total > 0 else 0,
+                'neutral_pct': (neutral / sentiment_total * 100) if sentiment_total > 0 else 0,
+                'negative_pct': (negative / sentiment_total * 100) if sentiment_total > 0 else 0,
+            }
+            
+            resolution_data = {
+                'total': total,
+                'resolved': resolved,
+                'unresolved': unresolved,
+                'unknown': resolution_unknown,
+                'resolution_rate': (resolved / total * 100) if total > 0 else 0
+            }
+            
+            csat_data = {
+                'good': csat_good,
+                'bad': csat_bad,
+                'no_rating': csat_no_rating,
+                'total': total,
+                'response_rate': (csat_rated / total * 100) if total > 0 else 0,
+                'satisfaction_rate': (csat_good / csat_rated * 100) if csat_rated > 0 else 0
+            }
             
         finally:
-            session.close()
+            pass  # Session managed by scoped_session
+        
+        # Get topic distribution (still needs separate query for GROUP BY)
+        topics = self.get_topic_distribution(start_date, end_date, top_n=10)
         
         return {
             'date_range': {
                 'start': start_date,
                 'end': end_date
             },
-            'ticket_count': sentiment['total'],
-            'sentiment': sentiment,
-            'resolution': resolution,
-            'csat': csat,
+            'ticket_count': total,
+            'sentiment': sentiment_data,
+            'resolution': resolution_data,
+            'csat': csat_data,
             'top_topics': topics.to_dict('records') if not topics.empty else [],
             'product_related': product_related,
             'service_related': service_related,
@@ -730,7 +931,7 @@ def generate_trend_snapshots(data_store, batch_id: int):
         data_store: DataStore instance
         batch_id: ID of the batch to generate snapshots for
     """
-    session = get_session(data_store.engine)
+    session = data_store._get_session()
     
     try:
         # Get batch info
