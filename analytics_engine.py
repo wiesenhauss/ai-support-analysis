@@ -592,6 +592,7 @@ class AnalyticsEngine:
         """
         Get CSAT rating distribution within a date range.
         
+        Handles Zendesk CSAT values that contain 'good' or 'bad' (e.g., "Offered, Good").
         Results are cached for improved performance on repeated calls.
         
         Args:
@@ -609,24 +610,30 @@ class AnalyticsEngine:
         
         session = self._get_session()
         try:
-            query = session.query(
-                TicketAnalysis.csat_rating,
-                func.count(TicketAnalysis.id).label('count')
-            )
+            from sqlalchemy import case
+            
+            # Build base query with date filters
+            base_query = session.query(TicketAnalysis)
             
             if start_date:
-                query = query.filter(TicketAnalysis.created_date >= start_date)
+                base_query = base_query.filter(TicketAnalysis.created_date >= start_date)
             if end_date:
-                query = query.filter(TicketAnalysis.created_date <= end_date)
+                base_query = base_query.filter(TicketAnalysis.created_date <= end_date)
             
-            query = query.group_by(TicketAnalysis.csat_rating)
+            # Count total tickets
+            total = base_query.count()
             
-            results = dict(query.all())
+            # Count 'good' ratings (contains 'good', case-insensitive)
+            good = base_query.filter(
+                TicketAnalysis.csat_rating.ilike('%good%')
+            ).count()
             
-            good = results.get('good', 0) + results.get('Good', 0)
-            bad = results.get('bad', 0) + results.get('Bad', 0)
-            no_rating = sum(v for k, v in results.items() if k not in ['good', 'Good', 'bad', 'Bad'])
-            total = good + bad + no_rating
+            # Count 'bad' ratings (contains 'bad', case-insensitive)
+            bad = base_query.filter(
+                TicketAnalysis.csat_rating.ilike('%bad%')
+            ).count()
+            
+            no_rating = total - good - bad
             rated = good + bad
             
             result = {
@@ -651,6 +658,7 @@ class AnalyticsEngine:
         """
         Get CSAT trend over time.
         
+        Handles Zendesk CSAT values that contain 'good' or 'bad' (e.g., "Offered, Good").
         Optimized to use SQL aggregations instead of loading full DataFrame.
         
         Args:
@@ -671,14 +679,12 @@ class AnalyticsEngine:
             else:  # month
                 period_expr = func.strftime('%Y-%m', TicketAnalysis.created_date)
             
-            # Normalize csat_rating to lowercase for comparison
-            csat_lower = func.lower(TicketAnalysis.csat_rating)
-            
-            # Query for CSAT counts per period
+            # Query for CSAT counts per period using case-insensitive LIKE patterns
+            # This handles values like "Good", "good", "Offered, Good", etc.
             query = session.query(
                 period_expr.label('period'),
-                func.sum(case((csat_lower == 'good', 1), else_=0)).label('good'),
-                func.sum(case((csat_lower == 'bad', 1), else_=0)).label('bad')
+                func.sum(case((TicketAnalysis.csat_rating.ilike('%good%'), 1), else_=0)).label('good'),
+                func.sum(case((TicketAnalysis.csat_rating.ilike('%bad%'), 1), else_=0)).label('bad')
             )
             
             if start_date:
@@ -999,9 +1005,9 @@ def generate_trend_snapshots(data_store, batch_id: int):
         )
         session.add(snapshot)
         
-        # Calculate CSAT
-        good_count = sum(1 for t in tickets if t.csat_rating and t.csat_rating.lower() == 'good')
-        bad_count = sum(1 for t in tickets if t.csat_rating and t.csat_rating.lower() == 'bad')
+        # Calculate CSAT (handles values like "Offered, Good" by checking if 'good'/'bad' is contained)
+        good_count = sum(1 for t in tickets if t.csat_rating and 'good' in t.csat_rating.lower())
+        bad_count = sum(1 for t in tickets if t.csat_rating and 'bad' in t.csat_rating.lower())
         rated_count = good_count + bad_count
         
         if rated_count > 0:
