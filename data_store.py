@@ -700,3 +700,7 @@ def reset_data_store():
     if _data_store_instance is not None:
         _data_store_instance.close()
     _data_store_instance = None
+
+
+# Flag indicating the data store module is available
+DATA_STORE_AVAILABLE = True
