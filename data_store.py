@@ -88,6 +88,16 @@ class DataStore:
         """
         self._Session.remove()
     
+    def close(self):
+        """
+        Close all sessions and dispose of the engine.
+        
+        Call this before replacing the database file to ensure
+        all connections are properly released.
+        """
+        self._Session.remove()
+        self.engine.dispose()
+    
     def _compute_ticket_hash(self, row: pd.Series) -> str:
         """
         Compute a unique hash for a ticket based on its content.
@@ -680,6 +690,13 @@ def get_data_store(db_path: Optional[str] = None) -> DataStore:
 
 
 def reset_data_store():
-    """Reset the singleton instance (useful for testing)."""
+    """
+    Reset the singleton instance.
+    
+    Properly closes all database connections before resetting.
+    Call this after replacing the database file to reinitialize.
+    """
     global _data_store_instance
+    if _data_store_instance is not None:
+        _data_store_instance.close()
     _data_store_instance = None
