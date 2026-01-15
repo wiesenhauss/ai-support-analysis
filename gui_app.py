@@ -28,10 +28,12 @@ from datetime import datetime
 import pandas as pd
 import platform
 import gc
+import shutil
+import sqlite3
 
 # Import data store for historical analytics
 try:
-    from data_store import get_data_store, DataStore
+    from data_store import get_data_store, reset_data_store, DataStore
     DATA_STORE_AVAILABLE = True
 except ImportError:
     DATA_STORE_AVAILABLE = False
@@ -472,6 +474,9 @@ class AISupportAnalyzerGUI:
         settings_menu.add_separator()
         settings_menu.add_command(label="Advanced Settings", command=self.show_advanced_settings)
         settings_menu.add_command(label="Settings Info", command=self.show_settings_info)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="Export History Database...", command=self.export_history_database)
+        settings_menu.add_command(label="Import History Database...", command=self.import_history_database)
         
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -2276,6 +2281,182 @@ Use default values unless you know what you're doing."""
 • Settings are user-specific and secure"""
         
         messagebox.showinfo("Settings Information", info_text)
+
+    def export_history_database(self):
+        """Export the history database to a user-selected location."""
+        if not DATA_STORE_AVAILABLE:
+            messagebox.showerror(
+                "Not Available",
+                "Historical analytics module is not available.\n\n"
+                "The database export feature requires the data_store module."
+            )
+            return
+        
+        try:
+            # Get the data store to find the database path
+            data_store = get_data_store()
+            db_path = data_store.db_path
+            
+            # Check if database exists
+            if not os.path.exists(db_path):
+                messagebox.showwarning(
+                    "No Database",
+                    "No history database found.\n\n"
+                    "Import some analysis results first to create a database."
+                )
+                return
+            
+            # Force a WAL checkpoint to ensure all data is in the main file
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.close()
+            except Exception as e:
+                print(f"WAL checkpoint warning: {e}")
+            
+            # Get database stats for info
+            stats = data_store.get_database_stats()
+            
+            # Ask user where to save
+            default_name = f"analytics_export_{datetime.now().strftime('%Y%m%d')}.db"
+            save_path = filedialog.asksaveasfilename(
+                title="Export History Database",
+                defaultextension=".db",
+                filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")],
+                initialfile=default_name
+            )
+            
+            if not save_path:
+                return  # User cancelled
+            
+            # Copy the database file
+            shutil.copy2(db_path, save_path)
+            
+            # Show success message
+            size_mb = os.path.getsize(save_path) / (1024 * 1024)
+            messagebox.showinfo(
+                "Export Successful",
+                f"Database exported successfully!\n\n"
+                f"📁 Saved to: {save_path}\n"
+                f"📊 Total tickets: {stats.get('total_tickets', 'N/A'):,}\n"
+                f"💾 File size: {size_mb:.2f} MB\n\n"
+                f"Share this file with others to let them import your analysis history."
+            )
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Export Failed",
+                f"Failed to export database:\n\n{str(e)}"
+            )
+
+    def import_history_database(self):
+        """Import a history database from another user."""
+        if not DATA_STORE_AVAILABLE:
+            messagebox.showerror(
+                "Not Available",
+                "Historical analytics module is not available.\n\n"
+                "The database import feature requires the data_store module."
+            )
+            return
+        
+        # Warn user about replacement
+        confirm = messagebox.askyesno(
+            "Import Database",
+            "⚠️ Importing a database will replace your current history.\n\n"
+            "Your existing database will be backed up before replacement.\n\n"
+            "Do you want to continue?",
+            icon='warning'
+        )
+        
+        if not confirm:
+            return
+        
+        # Ask user to select a database file
+        import_path = filedialog.askopenfilename(
+            title="Select Database to Import",
+            filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")]
+        )
+        
+        if not import_path:
+            return  # User cancelled
+        
+        try:
+            # Validate the selected file is a valid SQLite database
+            try:
+                conn = sqlite3.connect(import_path)
+                # Check if it has the expected tables
+                cursor = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='ticket_analyses'"
+                )
+                if not cursor.fetchone():
+                    conn.close()
+                    messagebox.showerror(
+                        "Invalid Database",
+                        "The selected file does not appear to be a valid history database.\n\n"
+                        "It must contain ticket analysis data."
+                    )
+                    return
+                conn.close()
+            except sqlite3.Error as e:
+                messagebox.showerror(
+                    "Invalid File",
+                    f"The selected file is not a valid SQLite database:\n\n{str(e)}"
+                )
+                return
+            
+            # Get current database path
+            data_store = get_data_store()
+            current_db_path = data_store.db_path
+            
+            # Create backup of existing database if it exists
+            backup_path = None
+            if os.path.exists(current_db_path):
+                backup_name = f"analytics_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+                backup_path = os.path.join(os.path.dirname(current_db_path), backup_name)
+                
+                # Force WAL checkpoint on current database before backup
+                try:
+                    conn = sqlite3.connect(current_db_path)
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    conn.close()
+                except Exception:
+                    pass
+                
+                shutil.copy2(current_db_path, backup_path)
+            
+            # Close current database connections
+            reset_data_store()
+            
+            # Remove old database files (including WAL files)
+            for ext in ['', '-wal', '-shm']:
+                old_file = current_db_path + ext
+                if os.path.exists(old_file):
+                    os.remove(old_file)
+            
+            # Copy new database to the correct location
+            shutil.copy2(import_path, current_db_path)
+            
+            # Reinitialize the data store
+            new_store = get_data_store()
+            stats = new_store.get_database_stats()
+            
+            # Show success message
+            success_msg = (
+                f"Database imported successfully!\n\n"
+                f"📊 Total tickets: {stats.get('total_tickets', 'N/A'):,}\n"
+                f"📅 Date range: {stats.get('date_range_start', 'N/A')} to {stats.get('date_range_end', 'N/A')}\n"
+            )
+            
+            if backup_path:
+                success_msg += f"\n💾 Your previous database was backed up to:\n{os.path.basename(backup_path)}"
+            
+            messagebox.showinfo("Import Successful", success_msg)
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Import Failed",
+                f"Failed to import database:\n\n{str(e)}"
+            )
 
     def show_about(self):
         """Show the about dialog."""
