@@ -128,6 +128,7 @@ The main user interface providing:
 - **Analysis module selection** (choose which analyses to run)
 - **Real-time progress tracking** with live log display
 - **Cancel functionality** with force stop option
+- **Database export/import** for sharing analysis history between users
 
 ### 2. Main Analysis Engine (`main-analysis-process.py`)
 
@@ -176,6 +177,7 @@ SQLite-based historical storage:
 - **Automatic deduplication** using ticket hash
 - **CSV import** with column mapping
 - **Query interface** for historical analysis
+- **Database export/import** for sharing history between users
 - Default location: `~/.ai_support_analyzer/analytics.db`
 
 ### 7. Talk to Data (`talktodata.py`)
@@ -627,6 +629,28 @@ Pre-computed aggregations for fast trending.
    - **Description**: Optional description for reference
 6. **Save & Close**: Your configurations are saved to settings
 7. **Run analysis**: Custom analyses will process after the main analysis
+
+#### Database Export/Import
+
+Share your analysis history with colleagues or transfer between machines:
+
+**To Export:**
+1. Go to **Settings** menu → **Export History Database...**
+2. Choose a save location and filename
+3. The database file (`.db`) will be copied to your chosen location
+4. Share this file with others via Slack, email, or file sharing
+
+**To Import:**
+1. Go to **Settings** menu → **Import History Database...**
+2. Confirm when warned that this will replace your current history
+3. Select the `.db` file to import
+4. Your previous database is automatically backed up (timestamped in `~/.ai_support_analyzer/`)
+5. The imported data is validated and loaded
+
+**Notes:**
+- Exported files include all ticket analyses, batches, and trend snapshots
+- Backups are stored as `analytics_backup_YYYYMMDD_HHMMSS.db`
+- Invalid database files are rejected with an error message
 
 ### Web UI Mode
 
