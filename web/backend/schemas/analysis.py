@@ -27,7 +27,10 @@ class AnalysisOptions(BaseModel):
     product_feedback: bool = True
     goals_trends: bool = True
     custom_analysis: bool = False
+    custom_ticket_analysis: bool = False
     visualization: bool = False
+    custom_prompt: Optional[str] = None
+    custom_columns: Optional[List[str]] = None
     limit: Optional[int] = None
     threads: int = 50
 

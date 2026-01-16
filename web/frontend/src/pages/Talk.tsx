@@ -4,7 +4,7 @@ import Alert from '@/components/Alert'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import { cn } from '@/lib/utils'
 import api from '@/api/client'
-import { Send, RotateCcw, User, Bot, Sparkles } from 'lucide-react'
+import { Send, RotateCcw, User, Bot, Sparkles, Database } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 
 interface Message {
@@ -18,6 +18,7 @@ export default function Talk() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [useHistory, setUseHistory] = useState(true) // Query all historical data
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -102,12 +103,25 @@ export default function Talk() {
             Ask questions about your support data in natural language
           </p>
         </div>
-        {messages.length > 0 && (
-          <button onClick={handleReset} className="btn btn-secondary">
-            <RotateCcw className="w-4 h-4 mr-2" />
-            New Conversation
-          </button>
-        )}
+        <div className="flex items-center gap-4">
+          {/* History Toggle */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useHistory}
+              onChange={(e) => setUseHistory(e.target.checked)}
+              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            <Database className="w-4 h-4 text-gray-500" />
+            <span className="text-sm text-gray-600">Query all history</span>
+          </label>
+          {messages.length > 0 && (
+            <button onClick={handleReset} className="btn btn-secondary">
+              <RotateCcw className="w-4 h-4 mr-2" />
+              New Conversation
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (

@@ -4,6 +4,38 @@
 
 const API_BASE = '/api'
 
+// ============== Type Definitions ==============
+
+export interface CustomTicketAnalysis {
+  name: string
+  prompt: string
+  result_type: 'boolean' | 'string'
+  description: string
+  columns: string[]
+}
+
+export interface CustomPrompt {
+  name: string
+  prompt: string
+  columns: string[]
+  created?: string
+  last_used?: string
+}
+
+export interface AdvancedSettings {
+  api_timeout: number
+  max_retries: number
+  batch_size: number
+  concurrent_threads: number
+}
+
+export interface OutputFile {
+  name: string
+  path: string
+  size_mb: number
+  modified: number
+}
+
 export class APIError extends Error {
   constructor(
     message: string,
@@ -80,6 +112,13 @@ export const api = {
       })
       return handleResponse(await fetch(`${API_BASE}/analytics/compare-periods?${params}`))
     },
+
+    getTopicTrend: async (topic: string, granularity = 'week', startDate?: string, endDate?: string) => {
+      const params = new URLSearchParams({ topic, granularity })
+      if (startDate) params.set('start_date', startDate)
+      if (endDate) params.set('end_date', endDate)
+      return handleResponse(await fetch(`${API_BASE}/analytics/topic-trend?${params}`))
+    },
   },
 
   // Insights endpoints
@@ -153,6 +192,40 @@ export const api = {
     getProductAreas: async () => {
       return handleResponse(await fetch(`${API_BASE}/data/product-areas`))
     },
+
+    // Database Export/Import
+    exportDatabase: async () => {
+      const response = await fetch(`${API_BASE}/data/export-database`)
+      if (!response.ok) {
+        throw new APIError('Export failed', response.status)
+      }
+      const blob = await response.blob()
+      // Trigger download
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `analytics_export_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.db`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+    },
+
+    importDatabase: async (file: File): Promise<{
+      message: string
+      backup_path: string | null
+      imported_tickets: number
+      imported_batches: number
+    }> => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return handleResponse(
+        await fetch(`${API_BASE}/data/import-database`, {
+          method: 'POST',
+          body: formData,
+        })
+      )
+    },
   },
 
   // Analysis endpoints
@@ -189,6 +262,26 @@ export const api = {
 
     getLogs: async (jobId: string, lastN = 100) => {
       return handleResponse(await fetch(`${API_BASE}/analysis/${jobId}/logs?last_n=${lastN}`))
+    },
+
+    getFiles: async (jobId: string): Promise<{ files: OutputFile[] }> => {
+      return handleResponse(await fetch(`${API_BASE}/analysis/${jobId}/files`))
+    },
+
+    downloadFile: async (jobId: string, filename: string) => {
+      const response = await fetch(`${API_BASE}/analysis/${jobId}/files/${encodeURIComponent(filename)}`)
+      if (!response.ok) {
+        throw new APIError('Download failed', response.status)
+      }
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
     },
   },
 
@@ -247,6 +340,67 @@ export const api = {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ api_key: apiKey }),
+        })
+      )
+    },
+
+    // Custom Per-Ticket Analyses
+    getCustomTicketAnalyses: async (): Promise<{ analyses: CustomTicketAnalysis[] }> => {
+      return handleResponse(await fetch(`${API_BASE}/settings/custom-ticket-analyses`))
+    },
+
+    saveCustomTicketAnalyses: async (analyses: CustomTicketAnalysis[]) => {
+      return handleResponse(
+        await fetch(`${API_BASE}/settings/custom-ticket-analyses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ analyses }),
+        })
+      )
+    },
+
+    deleteCustomTicketAnalysis: async (name: string) => {
+      return handleResponse(
+        await fetch(`${API_BASE}/settings/custom-ticket-analyses/${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+        })
+      )
+    },
+
+    // Custom Prompts
+    getCustomPrompts: async (): Promise<{ prompts: Record<string, CustomPrompt> }> => {
+      return handleResponse(await fetch(`${API_BASE}/settings/custom-prompts`))
+    },
+
+    saveCustomPrompt: async (name: string, prompt: CustomPrompt) => {
+      return handleResponse(
+        await fetch(`${API_BASE}/settings/custom-prompts/${encodeURIComponent(name)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(prompt),
+        })
+      )
+    },
+
+    deleteCustomPrompt: async (name: string) => {
+      return handleResponse(
+        await fetch(`${API_BASE}/settings/custom-prompts/${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+        })
+      )
+    },
+
+    // Advanced Settings
+    getAdvancedSettings: async (): Promise<AdvancedSettings> => {
+      return handleResponse(await fetch(`${API_BASE}/settings/advanced`))
+    },
+
+    saveAdvancedSettings: async (settings: AdvancedSettings) => {
+      return handleResponse(
+        await fetch(`${API_BASE}/settings/advanced`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings),
         })
       )
     },

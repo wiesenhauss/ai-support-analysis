@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { Card, CardHeader } from '@/components/Card'
 import Alert from '@/components/Alert'
 import LoadingSpinner, { PageLoader } from '@/components/LoadingSpinner'
+import CustomTicketAnalysisDialog from '@/components/CustomTicketAnalysisDialog'
 import { cn, formatNumber } from '@/lib/utils'
-import api from '@/api/client'
-import { Database, Trash2, Upload, RefreshCw, Key, Eye, EyeOff, CheckCircle, XCircle } from 'lucide-react'
+import api, { AdvancedSettings } from '@/api/client'
+import { Database, Trash2, Upload, RefreshCw, Key, Eye, EyeOff, CheckCircle, XCircle, Settings2, Sparkles, Download } from 'lucide-react'
 
 interface DatabaseStats {
   total_tickets: number
@@ -53,12 +54,50 @@ export default function Settings() {
   const [apiKeyValidation, setApiKeyValidation] = useState<{ valid: boolean; message: string } | null>(null)
   const [apiKeySuccess, setApiKeySuccess] = useState<string | null>(null)
 
+  // Custom Ticket Analyses state
+  const [showCustomAnalysisDialog, setShowCustomAnalysisDialog] = useState(false)
+  const [customAnalysesCount, setCustomAnalysesCount] = useState(0)
+
+  // Advanced Settings state
+  const [advancedSettings, setAdvancedSettings] = useState<AdvancedSettings>({
+    api_timeout: 60,
+    max_retries: 3,
+    batch_size: 100,
+    concurrent_threads: 50,
+  })
+  const [savingAdvanced, setSavingAdvanced] = useState(false)
+  const [advancedSuccess, setAdvancedSuccess] = useState<string | null>(null)
+
+  // Database Export/Import state
+  const [exporting, setExporting] = useState(false)
+  const [importingDb, setImportingDb] = useState(false)
+  const [dbImportFile, setDbImportFile] = useState<File | null>(null)
+  const [dbImportResult, setDbImportResult] = useState<string | null>(null)
+
   const fetchApiKeyStatus = useCallback(async () => {
     try {
       const status = await api.settings.getApiKeyStatus() as ApiKeyStatus
       setApiKeyStatus(status)
     } catch (err) {
       console.error('Failed to fetch API key status:', err)
+    }
+  }, [])
+
+  const fetchCustomAnalyses = useCallback(async () => {
+    try {
+      const response = await api.settings.getCustomTicketAnalyses()
+      setCustomAnalysesCount(response.analyses.length)
+    } catch (err) {
+      console.error('Failed to fetch custom analyses:', err)
+    }
+  }, [])
+
+  const fetchAdvancedSettings = useCallback(async () => {
+    try {
+      const settings = await api.settings.getAdvancedSettings()
+      setAdvancedSettings(settings)
+    } catch (err) {
+      console.error('Failed to fetch advanced settings:', err)
     }
   }, [])
 
@@ -82,7 +121,60 @@ export default function Settings() {
   useEffect(() => {
     fetchData()
     fetchApiKeyStatus()
-  }, [fetchData, fetchApiKeyStatus])
+    fetchCustomAnalyses()
+    fetchAdvancedSettings()
+  }, [fetchData, fetchApiKeyStatus, fetchCustomAnalyses, fetchAdvancedSettings])
+
+  const handleSaveAdvancedSettings = async () => {
+    setSavingAdvanced(true)
+    setAdvancedSuccess(null)
+    setError(null)
+    try {
+      await api.settings.saveAdvancedSettings(advancedSettings)
+      setAdvancedSuccess('Advanced settings saved successfully')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save advanced settings')
+    } finally {
+      setSavingAdvanced(false)
+    }
+  }
+
+  const handleExportDatabase = async () => {
+    setExporting(true)
+    setError(null)
+    try {
+      await api.data.exportDatabase()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to export database')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleImportDatabase = async () => {
+    if (!dbImportFile) return
+
+    if (!confirm('This will replace your current database. A backup will be created automatically. Continue?')) {
+      return
+    }
+
+    setImportingDb(true)
+    setDbImportResult(null)
+    setError(null)
+    try {
+      const result = await api.data.importDatabase(dbImportFile)
+      setDbImportResult(
+        `Successfully imported ${result.imported_tickets} tickets from ${result.imported_batches} batches.` +
+        (result.backup_path ? ` Backup saved to: ${result.backup_path}` : '')
+      )
+      setDbImportFile(null)
+      await fetchData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to import database')
+    } finally {
+      setImportingDb(false)
+    }
+  }
 
   const handleValidateApiKey = async () => {
     if (!newApiKey.trim()) return
@@ -344,6 +436,134 @@ export default function Settings() {
         </div>
       </Card>
 
+      {/* Custom Per-Ticket Analyses */}
+      <Card>
+        <CardHeader
+          title="Custom Per-Ticket Analyses"
+          description="Define AI analyses that run on each ticket during processing"
+          action={
+            <button
+              onClick={() => setShowCustomAnalysisDialog(true)}
+              className="btn btn-primary"
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              Configure
+            </button>
+          }
+        />
+        <div className="p-4 bg-gray-50 rounded-lg">
+          <p className="text-gray-700">
+            {customAnalysesCount === 0 ? (
+              <>No custom analyses configured. Click Configure to add your first analysis.</>
+            ) : (
+              <>{customAnalysesCount} custom {customAnalysesCount === 1 ? 'analysis' : 'analyses'} configured</>
+            )}
+          </p>
+          <p className="text-sm text-gray-500 mt-2">
+            Custom analyses can identify refund requests, classify urgency, detect escalation needs, and more.
+          </p>
+        </div>
+      </Card>
+
+      {/* Advanced Settings */}
+      <Card>
+        <CardHeader
+          title="Advanced Settings"
+          description="Configure analysis performance parameters"
+        />
+
+        {advancedSuccess && (
+          <Alert variant="success" className="mb-4">
+            {advancedSuccess}
+          </Alert>
+        )}
+
+        <div className="grid grid-cols-2 gap-6">
+          <div>
+            <label className="label">API Timeout (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              className="input"
+              value={advancedSettings.api_timeout}
+              onChange={(e) => setAdvancedSettings(prev => ({
+                ...prev,
+                api_timeout: parseInt(e.target.value) || 60
+              }))}
+            />
+            <p className="text-xs text-gray-500 mt-1">How long to wait for API responses</p>
+          </div>
+
+          <div>
+            <label className="label">Max Retries</label>
+            <input
+              type="number"
+              min="0"
+              max="10"
+              className="input"
+              value={advancedSettings.max_retries}
+              onChange={(e) => setAdvancedSettings(prev => ({
+                ...prev,
+                max_retries: parseInt(e.target.value) || 3
+              }))}
+            />
+            <p className="text-xs text-gray-500 mt-1">Retry attempts for failed API calls</p>
+          </div>
+
+          <div>
+            <label className="label">Batch Size</label>
+            <input
+              type="number"
+              min="1"
+              max="500"
+              className="input"
+              value={advancedSettings.batch_size}
+              onChange={(e) => setAdvancedSettings(prev => ({
+                ...prev,
+                batch_size: parseInt(e.target.value) || 100
+              }))}
+            />
+            <p className="text-xs text-gray-500 mt-1">Records processed per batch</p>
+          </div>
+
+          <div>
+            <label className="label">Concurrent Threads (1-100)</label>
+            <input
+              type="number"
+              min="1"
+              max="100"
+              className="input"
+              value={advancedSettings.concurrent_threads}
+              onChange={(e) => setAdvancedSettings(prev => ({
+                ...prev,
+                concurrent_threads: Math.min(100, Math.max(1, parseInt(e.target.value) || 50))
+              }))}
+            />
+            <p className="text-xs text-gray-500 mt-1">Parallel API calls (higher = faster but more API usage)</p>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end">
+          <button
+            onClick={handleSaveAdvancedSettings}
+            disabled={savingAdvanced}
+            className="btn btn-primary"
+          >
+            {savingAdvanced ? (
+              <>
+                <LoadingSpinner size="sm" className="mr-2" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Settings2 className="w-4 h-4 mr-2" />
+                Save Settings
+              </>
+            )}
+          </button>
+        </div>
+      </Card>
+
       {/* Database Stats */}
       <Card>
         <CardHeader
@@ -393,6 +613,88 @@ export default function Settings() {
             {stats.date_range_end ? new Date(stats.date_range_end).toLocaleDateString() : 'Present'}
           </p>
         )}
+      </Card>
+
+      {/* Database Export/Import */}
+      <Card>
+        <CardHeader
+          title="Database Export/Import"
+          description="Backup or restore your analysis database"
+        />
+
+        {dbImportResult && (
+          <Alert variant="success" className="mb-4">
+            {dbImportResult}
+          </Alert>
+        )}
+
+        <div className="space-y-6">
+          {/* Export */}
+          <div>
+            <h4 className="font-medium text-gray-900 mb-2">Export Database</h4>
+            <p className="text-sm text-gray-500 mb-3">
+              Download your entire analysis database for backup or sharing with colleagues.
+            </p>
+            <button
+              onClick={handleExportDatabase}
+              disabled={exporting}
+              className="btn btn-secondary"
+            >
+              {exporting ? (
+                <>
+                  <LoadingSpinner size="sm" className="mr-2" />
+                  Exporting...
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 mr-2" />
+                  Export Database
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Import */}
+          <div className="pt-4 border-t border-gray-200">
+            <h4 className="font-medium text-gray-900 mb-2">Import Database</h4>
+            <p className="text-sm text-gray-500 mb-3">
+              Replace your current database with an exported database file. Your current database will be backed up automatically.
+            </p>
+            <div className="flex gap-4">
+              <div className="flex-1">
+                <input
+                  type="file"
+                  accept=".db"
+                  onChange={(e) => setDbImportFile(e.target.files?.[0] || null)}
+                  className="block w-full text-sm text-gray-500
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-lg file:border-0
+                    file:text-sm file:font-medium
+                    file:bg-primary-50 file:text-primary-700
+                    hover:file:bg-primary-100"
+                  disabled={importingDb}
+                />
+              </div>
+              <button
+                onClick={handleImportDatabase}
+                disabled={!dbImportFile || importingDb}
+                className="btn btn-primary"
+              >
+                {importingDb ? (
+                  <>
+                    <LoadingSpinner size="sm" className="mr-2" />
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4 mr-2" />
+                    Import
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       </Card>
 
       {/* Import CSV */}
@@ -537,6 +839,15 @@ export default function Settings() {
           <p>Powered by OpenAI GPT-4</p>
         </div>
       </Card>
+
+      {/* Custom Ticket Analysis Dialog */}
+      <CustomTicketAnalysisDialog
+        isOpen={showCustomAnalysisDialog}
+        onClose={() => {
+          setShowCustomAnalysisDialog(false)
+          fetchCustomAnalyses()
+        }}
+      />
     </div>
   )
 }

@@ -5,11 +5,14 @@ Provides endpoints for importing, querying, and managing data.
 
 import sys
 import os
+import shutil
+import sqlite3
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
@@ -274,8 +277,148 @@ async def get_product_areas(
         df = data_store.get_tickets_dataframe()
         if df.empty or 'product_area' not in df.columns:
             return {"product_areas": []}
-        
+
         areas = df['product_area'].dropna().unique().tolist()
         return {"product_areas": sorted(areas)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== Database Export/Import ==============
+
+@router.get("/export-database")
+async def export_database(
+    data_store=Depends(get_data_store_dep)
+):
+    """
+    Export the SQLite database file for backup or sharing.
+
+    Returns the database file as a download.
+    """
+    try:
+        db_path = data_store.db_path
+
+        if not os.path.exists(db_path):
+            raise HTTPException(status_code=404, detail="Database not found")
+
+        # Force WAL checkpoint to ensure all data is written to main file
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.close()
+        except Exception:
+            pass  # Continue even if checkpoint fails
+
+        # Generate export filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_filename = f"analytics_export_{timestamp}.db"
+
+        return FileResponse(
+            path=db_path,
+            filename=export_filename,
+            media_type="application/octet-stream"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+@router.post("/import-database")
+async def import_database(
+    file: UploadFile = File(...),
+    data_store=Depends(get_data_store_dep)
+):
+    """
+    Import a database file, creating a timestamped backup of the existing database.
+
+    The uploaded file must be a valid SQLite database with the expected schema.
+    """
+    if not file.filename.endswith('.db'):
+        raise HTTPException(status_code=400, detail="File must be a .db SQLite database")
+
+    current_db_path = data_store.db_path
+    db_dir = os.path.dirname(current_db_path)
+
+    # Save uploaded file to temp location
+    temp_path = os.path.join(db_dir, f"_temp_import_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+
+    try:
+        content = await file.read()
+        with open(temp_path, 'wb') as f:
+            f.write(content)
+
+        # Validate the uploaded database structure
+        try:
+            conn = sqlite3.connect(temp_path)
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='ticket_analyses'"
+            )
+            if not cursor.fetchone():
+                conn.close()
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid database: missing ticket_analyses table"
+                )
+
+            # Get stats from imported database
+            cursor = conn.execute("SELECT COUNT(*) FROM ticket_analyses")
+            imported_ticket_count = cursor.fetchone()[0]
+
+            cursor = conn.execute("SELECT COUNT(*) FROM analysis_batches")
+            imported_batch_count = cursor.fetchone()[0]
+
+            conn.close()
+        except sqlite3.Error as e:
+            raise HTTPException(status_code=400, detail=f"Invalid SQLite database: {str(e)}")
+
+        # Create timestamped backup of existing database
+        backup_path = None
+        if os.path.exists(current_db_path):
+            backup_name = f"analytics_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            backup_path = os.path.join(db_dir, backup_name)
+
+            # Checkpoint current database before backup
+            try:
+                conn = sqlite3.connect(current_db_path)
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.close()
+            except Exception:
+                pass
+
+            # Create backup
+            shutil.copy2(current_db_path, backup_path)
+
+        # Close current database connections
+        data_store.close()
+
+        # Remove old database files including WAL and SHM
+        for ext in ['', '-wal', '-shm']:
+            old_file = current_db_path + ext
+            if os.path.exists(old_file):
+                os.remove(old_file)
+
+        # Move new database into place
+        shutil.move(temp_path, current_db_path)
+
+        # Reinitialize data store
+        data_store._init_db()
+
+        # Get stats from newly imported database
+        new_stats = data_store.get_database_stats()
+
+        return {
+            "message": "Database imported successfully",
+            "backup_path": backup_path,
+            "imported_tickets": imported_ticket_count,
+            "imported_batches": imported_batch_count,
+            "stats": new_stats
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Clean up temp file on error
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")

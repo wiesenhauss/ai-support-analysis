@@ -108,3 +108,26 @@ export function useTopicDistribution(
 
   return useApi(fetchTopics)
 }
+
+interface TopicTrendPoint {
+  period: string
+  count: number
+  percentage: number
+}
+
+export function useTopicTrend(
+  topic: string | null,
+  granularity = 'week',
+  startDate?: string,
+  endDate?: string
+) {
+  const fetchTrend = useCallback(
+    () => {
+      if (!topic) return Promise.resolve([])
+      return api.analytics.getTopicTrend(topic, granularity, startDate, endDate) as Promise<TopicTrendPoint[]>
+    },
+    [topic, granularity, startDate, endDate]
+  )
+
+  return useApi(fetchTrend)
+}

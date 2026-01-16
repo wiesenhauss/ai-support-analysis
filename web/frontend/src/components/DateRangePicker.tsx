@@ -66,10 +66,7 @@ function getPresetRange(preset: PresetKey): DateRange {
 
 function getPresetFromRange(range: DateRange): PresetKey {
   if (!range.startDate && !range.endDate) return 'all'
-  
-  const today = new Date()
-  const formatDate = (d: Date) => d.toISOString().split('T')[0]
-  
+
   for (const preset of presets) {
     if (preset.key === 'all' || preset.key === 'custom') continue
     const presetRange = getPresetRange(preset.key)

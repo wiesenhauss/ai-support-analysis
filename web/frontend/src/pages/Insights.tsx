@@ -6,7 +6,7 @@ import Alert from '@/components/Alert'
 import EmptyState from '@/components/EmptyState'
 import DateRangePicker from '@/components/DateRangePicker'
 import { cn, formatPercent } from '@/lib/utils'
-import { AlertTriangle, TrendingUp, TrendingDown, Lightbulb, ArrowUpRight, ArrowDownRight, Calendar } from 'lucide-react'
+import { AlertTriangle, TrendingUp, Lightbulb, ArrowUpRight, ArrowDownRight, Calendar } from 'lucide-react'
 
 type TimeRange = 'weekly' | 'monthly' | 'custom'
 

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useDashboardStats, useSentimentTrend, useTopicDistribution } from '@/hooks/useDashboard'
+import { useState, useMemo } from 'react'
+import { useDashboardStats, useSentimentTrend, useTopicDistribution, useTopicTrend } from '@/hooks/useDashboard'
 import { useWeeklyInsights } from '@/hooks/useInsights'
 import MetricCard from '@/components/MetricCard'
 import { Card, CardHeader } from '@/components/Card'
@@ -33,18 +33,22 @@ interface DateRange {
   endDate: string | undefined
 }
 
+type Granularity = 'day' | 'week' | 'month'
+
 export default function Dashboard() {
   const [dateRange, setDateRange] = useState<DateRange>({
     startDate: undefined,
     endDate: undefined,
   })
+  const [granularity, setGranularity] = useState<Granularity>('week')
+  const [selectedTopic, setSelectedTopic] = useState<string | null>(null)
 
   const { data: stats, loading: statsLoading, error: statsError } = useDashboardStats(
     dateRange.startDate,
     dateRange.endDate
   )
   const { data: sentimentTrend, loading: trendLoading } = useSentimentTrend(
-    'week',
+    granularity,
     dateRange.startDate,
     dateRange.endDate
   )
@@ -52,7 +56,19 @@ export default function Dashboard() {
     dateRange.startDate,
     dateRange.endDate
   )
-  const { data: insights, loading: insightsLoading } = useWeeklyInsights()
+  const { data: topicTrend, loading: topicTrendLoading } = useTopicTrend(
+    selectedTopic,
+    granularity,
+    dateRange.startDate,
+    dateRange.endDate
+  )
+  const { data: insights } = useWeeklyInsights()
+
+  // Build topic options list from topics data
+  const topicOptions = useMemo(() => {
+    if (!topics || topics.length === 0) return []
+    return topics.map(t => t.topic)
+  }, [topics])
 
   if (statsLoading) {
     return <PageLoader />
@@ -146,7 +162,24 @@ export default function Dashboard() {
         <Card>
           <CardHeader
             title="Sentiment Trend"
-            description="Weekly sentiment distribution"
+            description={`${granularity.charAt(0).toUpperCase() + granularity.slice(1)}ly sentiment distribution`}
+            action={
+              <div className="flex gap-1">
+                {(['day', 'week', 'month'] as const).map((g) => (
+                  <button
+                    key={g}
+                    onClick={() => setGranularity(g)}
+                    className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                      granularity === g
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {g.charAt(0).toUpperCase() + g.slice(1)}
+                  </button>
+                ))}
+              </div>
+            }
           />
           {trendLoading ? (
             <div className="h-64 flex items-center justify-center">
@@ -281,6 +314,85 @@ export default function Dashboard() {
         ) : (
           <div className="h-64 flex items-center justify-center text-gray-500">
             No topic data available
+          </div>
+        )}
+      </Card>
+
+      {/* Topic Trend */}
+      <Card>
+        <CardHeader
+          title="Topic Trend"
+          description={selectedTopic ? `Trend for "${selectedTopic}"` : 'Select a topic to view its trend'}
+          action={
+            <select
+              value={selectedTopic || ''}
+              onChange={(e) => setSelectedTopic(e.target.value || null)}
+              className="text-sm border border-gray-300 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              <option value="">Select a topic...</option>
+              {topicOptions.map((topic) => (
+                <option key={topic} value={topic}>
+                  {topic}
+                </option>
+              ))}
+            </select>
+          }
+        />
+        {!selectedTopic ? (
+          <div className="h-64 flex items-center justify-center text-gray-500">
+            Select a topic from the dropdown to view its trend over time
+          </div>
+        ) : topicTrendLoading ? (
+          <div className="h-64 flex items-center justify-center">
+            <PageLoader />
+          </div>
+        ) : topicTrend && topicTrend.length > 0 ? (
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={topicTrend}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  dataKey="period"
+                  tick={{ fontSize: 12 }}
+                  tickFormatter={(value) => {
+                    const date = new Date(value)
+                    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                  }}
+                />
+                <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                <Tooltip
+                  formatter={(value: number, name: string) => [
+                    name === 'Tickets' ? formatNumber(value) : `${value.toFixed(1)}%`,
+                    name,
+                  ]}
+                  labelFormatter={(label) => new Date(label).toLocaleDateString()}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="count"
+                  name="Tickets"
+                  stroke="#0ea5e9"
+                  strokeWidth={2}
+                  dot={{ fill: '#0ea5e9', strokeWidth: 2 }}
+                  yAxisId="left"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="percentage"
+                  name="% of Total"
+                  stroke="#8b5cf6"
+                  strokeWidth={2}
+                  dot={{ fill: '#8b5cf6', strokeWidth: 2 }}
+                  yAxisId="right"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <div className="h-64 flex items-center justify-center text-gray-500">
+            No trend data available for this topic
           </div>
         )}
       </Card>

@@ -28,6 +28,7 @@ interface TicketsResponse {
 }
 
 interface Filters {
+  [key: string]: string | number | boolean | undefined
   start_date: string
   end_date: string
   sentiment: string
