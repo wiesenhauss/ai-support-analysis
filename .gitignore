@@ -12,3 +12,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Application settings and secrets
+.analyzer_settings.json
+web_settings.json
+*.env
