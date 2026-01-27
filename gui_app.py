@@ -30,6 +30,9 @@ import platform
 import gc
 import shutil
 import sqlite3
+import webbrowser
+import socket
+import signal
 
 # Import data store for historical analytics
 try:
@@ -304,6 +307,182 @@ class SettingsManager:
             "platform": platform.system()
         }
 
+
+class WebServerManager:
+    """Manages the web UI backend server as a subprocess."""
+    
+    def __init__(self, log_callback=None):
+        self.process = None
+        self.port = 8000
+        self.log_callback = log_callback
+        self._startup_thread = None
+    
+    def _log(self, message):
+        """Log a message using the callback if provided."""
+        if self.log_callback:
+            self.log_callback(message)
+        else:
+            print(message)
+    
+    def is_port_in_use(self, port=None):
+        """Check if a port is already in use."""
+        port = port or self.port
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('localhost', port))
+                return False
+            except OSError:
+                return True
+    
+    def is_running(self):
+        """Check if the server process is still running."""
+        if self.process is None:
+            return False
+        return self.process.poll() is None
+    
+    def start(self, api_key=None):
+        """Start the web backend server.
+        
+        Args:
+            api_key: Optional OpenAI API key to pass to the server
+            
+        Returns:
+            True if started successfully, False otherwise
+        """
+        if self.is_running():
+            self._log("🌐 Web server is already running")
+            return True
+        
+        # Check if port is in use by another process
+        if self.is_port_in_use():
+            self._log(f"⚠️  Port {self.port} is already in use")
+            # Could be our server or another process - try to connect
+            return True  # Assume it's already running
+        
+        try:
+            # Get the path to the web backend
+            if getattr(sys, 'frozen', False):
+                # Running as compiled app
+                app_dir = Path(sys.executable).parent.parent / "Resources"
+            else:
+                # Running as script
+                app_dir = Path(__file__).parent
+            
+            backend_dir = app_dir / "web" / "backend"
+            
+            if not backend_dir.exists():
+                self._log(f"❌ Web backend not found at {backend_dir}")
+                return False
+            
+            # Build environment with API key
+            env = os.environ.copy()
+            if api_key:
+                env['OPENAI_API_KEY'] = api_key
+            
+            # Start uvicorn server
+            self._log("🚀 Starting web UI server...")
+            
+            # Use python -m uvicorn to ensure proper module resolution
+            cmd = [
+                sys.executable, "-m", "uvicorn",
+                "main:app",
+                "--host", "0.0.0.0",
+                "--port", str(self.port)
+            ]
+            
+            # Suppress output on Windows, redirect on Unix
+            if platform.system() == "Windows":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                self.process = subprocess.Popen(
+                    cmd,
+                    cwd=str(backend_dir),
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    startupinfo=startupinfo
+                )
+            else:
+                self.process = subprocess.Popen(
+                    cmd,
+                    cwd=str(backend_dir),
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    preexec_fn=os.setpgrp  # Create new process group
+                )
+            
+            self._log(f"🌐 Web server starting on http://localhost:{self.port}")
+            return True
+            
+        except Exception as e:
+            self._log(f"❌ Failed to start web server: {e}")
+            return False
+    
+    def stop(self):
+        """Stop the web backend server."""
+        if not self.is_running():
+            self._log("🌐 Web server is not running")
+            return True
+        
+        try:
+            self._log("⏹ Stopping web UI server...")
+            
+            if platform.system() == "Windows":
+                self.process.terminate()
+            else:
+                # Kill the process group to ensure all children are terminated
+                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+            
+            # Wait for graceful shutdown
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # Force kill if still running
+                if platform.system() == "Windows":
+                    self.process.kill()
+                else:
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                self.process.wait(timeout=2)
+            
+            self.process = None
+            self._log("✅ Web server stopped")
+            return True
+            
+        except Exception as e:
+            self._log(f"⚠️  Error stopping web server: {e}")
+            self.process = None
+            return False
+    
+    def wait_for_ready(self, timeout=15):
+        """Wait for the server to be ready to accept connections.
+        
+        Args:
+            timeout: Maximum seconds to wait
+            
+        Returns:
+            True if server is ready, False if timeout
+        """
+        import urllib.request
+        import urllib.error
+        
+        start_time = time.time()
+        url = f"http://localhost:{self.port}/health"
+        
+        while time.time() - start_time < timeout:
+            try:
+                response = urllib.request.urlopen(url, timeout=1)
+                if response.status == 200:
+                    return True
+            except (urllib.error.URLError, urllib.error.HTTPError, ConnectionRefusedError):
+                pass
+            except Exception:
+                pass
+            time.sleep(0.5)
+        
+        return False
+
+
 class AISupportAnalyzerGUI:
     def __init__(self, root):
         self.root = root
@@ -312,6 +491,9 @@ class AISupportAnalyzerGUI:
         
         # Initialize settings manager
         self.settings_manager = SettingsManager()
+        
+        # Initialize web server manager (will set log_callback after log_message method is available)
+        self.web_server_manager = WebServerManager()
         
         # Variables
         self.api_key_var = tk.StringVar()
@@ -693,7 +875,10 @@ class AISupportAnalyzerGUI:
         self.insights_dashboard_button.pack(side=tk.LEFT, padx=(0, 10))
         
         self.talk_to_history_button = ttk.Button(control_frame, text="🗣️ Talk to History", command=self.open_talk_to_history)
-        self.talk_to_history_button.pack(side=tk.LEFT)
+        self.talk_to_history_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.web_ui_button = ttk.Button(control_frame, text="🌐 Open Web UI", command=self.toggle_web_ui)
+        self.web_ui_button.pack(side=tk.LEFT)
         
         # Progress Section
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding="10")
@@ -3975,6 +4160,70 @@ Here are the records to analyze:
             error_msg = str(e)
             self.log_message(f"❌ Talk to History error: {error_msg}")
             messagebox.showerror("Error", f"Failed to open Talk to History:\n\n{error_msg}")
+    
+    def toggle_web_ui(self):
+        """Toggle the web UI server on/off and open browser."""
+        # Set log callback if not already set
+        if self.web_server_manager.log_callback is None:
+            self.web_server_manager.log_callback = self.log_message
+        
+        if self.web_server_manager.is_running() or self.web_server_manager.is_port_in_use():
+            # Server is running - stop it
+            self.web_server_manager.stop()
+            self.web_ui_button.config(text="🌐 Open Web UI")
+        else:
+            # Start the server
+            api_key = self.api_key_var.get().strip()
+            if not api_key:
+                messagebox.showwarning(
+                    "API Key Recommended",
+                    "No API key configured. The Web UI will have limited functionality.\n\n"
+                    "Enter your OpenAI API key to enable all features."
+                )
+            
+            # Disable button during startup
+            self.web_ui_button.config(state=tk.DISABLED, text="🌐 Starting...")
+            self.root.update()
+            
+            # Start server in background thread
+            def start_server():
+                success = self.web_server_manager.start(api_key=api_key)
+                
+                if success:
+                    # Wait for server to be ready
+                    self.log_message("   Waiting for server to be ready...")
+                    if self.web_server_manager.wait_for_ready(timeout=15):
+                        self.log_message(f"✅ Web UI ready at http://localhost:{self.web_server_manager.port}")
+                        
+                        # Open browser
+                        webbrowser.open(f"http://localhost:{self.web_server_manager.port}")
+                        
+                        # Update button in main thread
+                        self.root.after(0, lambda: self.web_ui_button.config(
+                            state=tk.NORMAL, 
+                            text="⏹ Stop Web UI"
+                        ))
+                    else:
+                        self.log_message("⚠️  Server started but may not be ready. Opening browser anyway...")
+                        webbrowser.open(f"http://localhost:{self.web_server_manager.port}")
+                        self.root.after(0, lambda: self.web_ui_button.config(
+                            state=tk.NORMAL, 
+                            text="⏹ Stop Web UI"
+                        ))
+                else:
+                    self.root.after(0, lambda: self.web_ui_button.config(
+                        state=tk.NORMAL, 
+                        text="🌐 Open Web UI"
+                    ))
+            
+            threading.Thread(target=start_server, daemon=True).start()
+    
+    def cleanup_on_exit(self):
+        """Clean up resources when the application is closing."""
+        # Stop web server if running
+        if hasattr(self, 'web_server_manager') and self.web_server_manager.is_running():
+            self.web_server_manager.stop()
+
 
 def main():
     """Main function to run the GUI application."""
@@ -3993,6 +4242,13 @@ def main():
     x = (root.winfo_screenwidth() // 2) - (1000 // 2)
     y = (root.winfo_screenheight() // 2) - (800 // 2)
     root.geometry(f"+{x}+{y}")
+    
+    # Handle window close to cleanup resources
+    def on_closing():
+        app.cleanup_on_exit()
+        root.destroy()
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     
     # Start the GUI
     root.mainloop()
