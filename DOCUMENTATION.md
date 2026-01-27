@@ -693,6 +693,14 @@ Share your analysis history with colleagues or transfer between machines:
 3. **Configure API key** in Settings page (first time only)
 4. **Use the dashboard** to view analytics and insights
 5. **Upload files** in the Analyze page to run new analyses
+
+#### Auto-Import to History (Web UI)
+
+When running analysis through the Web UI's Analyze page, the **"Auto-import to History"** checkbox (enabled by default) will automatically import analysis results to the historical database after the analysis completes. This provides the same behavior as the desktop GUI's auto-import feature:
+
+- Results are imported to the SQLite database for historical tracking
+- Duplicate tickets are automatically detected and skipped
+- Import statistics are shown in the job logs (tickets imported, duplicates skipped, date range)
 6. **Explore data** with filters or use Talk to Data for natural language queries
 
 ### Command Line Mode

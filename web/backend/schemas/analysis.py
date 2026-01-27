@@ -29,6 +29,7 @@ class AnalysisOptions(BaseModel):
     custom_analysis: bool = False
     custom_ticket_analysis: bool = False
     visualization: bool = False
+    auto_import: bool = True  # Auto-import results to database after analysis
     custom_prompt: Optional[str] = None
     custom_columns: Optional[List[str]] = None
     limit: Optional[int] = None
@@ -53,6 +54,7 @@ class AnalysisJobStatus(BaseModel):
     error_message: Optional[str] = None
     output_file: Optional[str] = None
     logs: List[str] = Field(default_factory=list)
+    import_stats: Optional[Dict[str, Any]] = None  # Auto-import results: imported, duplicates, period
 
 
 class AnalysisJobResponse(BaseModel):

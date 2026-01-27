@@ -8,9 +8,10 @@ import os
 import asyncio
 import subprocess
 import re
+import glob
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from concurrent.futures import ThreadPoolExecutor
 
 # Add project root to path
@@ -167,6 +168,10 @@ class AnalysisJobManager:
                 self.jobs[job_id].progress = 100.0
                 self.jobs[job_id].current_step = "Complete"
                 self._add_log(job_id, "Analysis completed successfully")
+                
+                # Auto-import to database if enabled
+                if options.auto_import:
+                    self._perform_auto_import(job_id, file_path)
             else:
                 self.jobs[job_id].status = AnalysisStatus.FAILED
                 self.jobs[job_id].error_message = f"Process exited with code {process.returncode}"
@@ -192,6 +197,85 @@ class AnalysisJobManager:
             # Keep only last 1000 log lines
             if len(self.jobs[job_id].logs) > 1000:
                 self.jobs[job_id].logs = self.jobs[job_id].logs[-1000:]
+    
+    def _perform_auto_import(self, job_id: str, input_file_path: str):
+        """
+        Automatically import analysis results to the historical database.
+        
+        Args:
+            job_id: The job identifier
+            input_file_path: Path to the original input file (used to find output directory)
+        """
+        try:
+            # Try to import data_store
+            try:
+                from data_store import get_data_store
+            except ImportError:
+                self._add_log(job_id, "Auto-import skipped: Historical analytics module not available")
+                return
+            
+            # Find the output directory (same as input file directory)
+            input_dir = os.path.dirname(input_file_path)
+            
+            # Also check the job's output_file if available
+            output_file = self.jobs[job_id].output_file
+            if output_file and os.path.exists(output_file):
+                # Use the output file directly
+                file_to_import = output_file
+            else:
+                # Search for output files by pattern
+                output_patterns = [
+                    "*support-analysis-output*.csv",
+                    "*predictive-csat*.csv"
+                ]
+                
+                analysis_files = []
+                for pattern in output_patterns:
+                    analysis_files.extend(glob.glob(os.path.join(input_dir, pattern)))
+                
+                if not analysis_files:
+                    self._add_log(job_id, "Auto-import skipped: No analysis output files found")
+                    return
+                
+                # Get the most recent file
+                analysis_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                file_to_import = analysis_files[0]
+            
+            self._add_log(job_id, "")
+            self._add_log(job_id, "Auto-importing results to historical database...")
+            self._add_log(job_id, f"   File: {os.path.basename(file_to_import)}")
+            
+            # Get data store instance and import
+            data_store = get_data_store()
+            stats = data_store.import_csv(file_to_import)
+            
+            # Store import stats in job status
+            self.jobs[job_id].import_stats = {
+                "imported": stats.get("imported", 0),
+                "duplicates": stats.get("duplicates", 0),
+                "period_start": stats.get("period_start"),
+                "period_end": stats.get("period_end"),
+                "file": os.path.basename(file_to_import)
+            }
+            
+            # Log results
+            self._add_log(job_id, "Auto-import completed!")
+            self._add_log(job_id, f"   New tickets imported: {stats.get('imported', 0):,}")
+            self._add_log(job_id, f"   Duplicates skipped: {stats.get('duplicates', 0):,}")
+            
+            if stats.get('period_start') and stats.get('period_end'):
+                self._add_log(job_id, f"   Date range: {stats['period_start']} to {stats['period_end']}")
+            
+            # Get overall database stats
+            try:
+                db_stats = data_store.get_database_stats()
+                self._add_log(job_id, f"   Total tickets in history: {db_stats.get('total_tickets', 0):,}")
+            except Exception:
+                pass  # Non-critical
+            
+        except Exception as e:
+            self._add_log(job_id, f"Auto-import failed: {str(e)}")
+            # Don't raise - this is a non-critical feature
     
     def get_job_status(self, job_id: str) -> Optional[AnalysisJobStatus]:
         """Get the status of a job."""
