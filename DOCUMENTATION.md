@@ -63,6 +63,7 @@ Customer support teams face several challenges that this tool addresses:
 │   • API key management (macOS Keychain integration)                  │
 │   • Real-time progress tracking                                      │
 │   • Analysis module selection                                        │
+│   • One-click Web UI launch (🌐 Open Web UI button)                  │
 └─────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
@@ -129,6 +130,7 @@ The main user interface providing:
 - **Real-time progress tracking** with live log display
 - **Cancel functionality** with force stop option
 - **Database export/import** for sharing analysis history between users
+- **One-click Web UI launch** - Start the web interface directly from the desktop app
 
 ### 2. Main Analysis Engine (`main-analysis-process.py`)
 
@@ -254,9 +256,28 @@ The AI Support Analyzer includes a modern web-based interface as an alternative 
 
 ### Running the Web UI
 
+#### Option 1: One-Click Launch from Desktop GUI (Recommended)
+
+The easiest way to launch the Web UI is directly from the desktop application:
+
+1. **Open** the AI Support Analyzer desktop app
+2. **Click** the "🌐 Open Web UI" button in the toolbar
+3. The server starts automatically and your browser opens to the Web UI
+4. Click "⏹ Stop Web UI" to shut down the server when done
+
+This method:
+- Automatically passes your API key to the web server
+- Handles server startup and shutdown cleanly
+- Serves the pre-built frontend (no Node.js required)
+- Works on `http://localhost:8000`
+
+#### Option 2: Manual Terminal Launch (Development)
+
+For development or when you need more control:
+
 **Prerequisites:**
 - Python 3.12+
-- Node.js 18+
+- Node.js 18+ (only for frontend development)
 - OpenAI API key 
 
 **1. Start the Backend:**
@@ -269,7 +290,11 @@ uvicorn main:app --reload --port 8000
 
 The API will be available at `http://localhost:8000` with interactive docs at `http://localhost:8000/api/docs`.
 
-**2. Start the Frontend:**
+**2a. Use Pre-built Frontend (Production):**
+
+If the frontend has been built (`web/frontend/dist/` exists), the backend automatically serves it. Just navigate to `http://localhost:8000`.
+
+**2b. Start Frontend Dev Server (Development):**
 
 ```bash
 cd web/frontend
@@ -277,7 +302,7 @@ npm install
 npm run dev
 ```
 
-The web UI will be available at `http://localhost:5173`.
+The development server runs at `http://localhost:5173` with hot reload.
 
 **3. Configure API Key:**
 
@@ -654,13 +679,29 @@ Share your analysis history with colleagues or transfer between machines:
 
 ### Web UI Mode
 
+#### Quick Launch (from Desktop GUI)
+
+1. **Launch** the desktop app
+2. **Click "🌐 Open Web UI"** button - the browser opens automatically
+3. **Use the dashboard** to view analytics and insights
+4. **Click "⏹ Stop Web UI"** when done to shut down the server
+
+#### Manual Launch (Terminal)
+
 1. **Start the backend**: `cd web/backend && uvicorn main:app --port 8000`
-2. **Start the frontend**: `cd web/frontend && npm run dev`
-3. **Open browser** to `http://localhost:5173`
-4. **Configure API key** in Settings page (first time only)
-5. **Use the dashboard** to view analytics and insights
-6. **Upload files** in the Analyze page to run new analyses
-7. **Explore data** with filters or use Talk to Data for natural language queries
+2. **Open browser** to `http://localhost:8000` (uses pre-built frontend)
+3. **Configure API key** in Settings page (first time only)
+4. **Use the dashboard** to view analytics and insights
+5. **Upload files** in the Analyze page to run new analyses
+
+#### Auto-Import to History (Web UI)
+
+When running analysis through the Web UI's Analyze page, the **"Auto-import to History"** checkbox (enabled by default) will automatically import analysis results to the historical database after the analysis completes. This provides the same behavior as the desktop GUI's auto-import feature:
+
+- Results are imported to the SQLite database for historical tracking
+- Duplicate tickets are automatically detected and skipped
+- Import statistics are shown in the job logs (tickets imported, duplicates skipped, date range)
+6. **Explore data** with filters or use Talk to Data for natural language queries
 
 ### Command Line Mode
 
@@ -802,12 +843,12 @@ Areas for potential enhancement:
 
 - [x] Dashboard web interface (implemented in `web/`)
 - [x] Custom per-ticket analysis (implemented in `custom_ticket_analysis.py`)
+- [x] One-click Web UI launch from desktop app
 - [ ] Real-time Zendesk integration
 - [ ] Custom AI model fine-tuning
 - [ ] Multi-language support
 - [ ] Advanced visualization exports
 - [ ] Team collaboration features
-- [ ] Packaged web app (standalone .app with embedded server)
 
 ---
 

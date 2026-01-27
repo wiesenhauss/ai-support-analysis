@@ -18,6 +18,7 @@ interface AnalysisOptions {
   custom_analysis: boolean
   custom_ticket_analysis: boolean
   visualization: boolean
+  auto_import: boolean
   limit: number | null
   threads: number
 }
@@ -47,6 +48,7 @@ export default function Analyze() {
     custom_analysis: false,
     custom_ticket_analysis: false,
     visualization: false,
+    auto_import: true,
     limit: null,
     threads: 50,
   })
@@ -349,6 +351,27 @@ export default function Analyze() {
               )}
             </div>
           ))}
+        </div>
+
+        {/* Auto-Import Option */}
+        <div className="mt-6 pt-6 border-t border-gray-200">
+          <label className={cn(
+            'flex items-start gap-3 p-3 rounded-lg border transition-colors cursor-pointer',
+            options.auto_import ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300',
+            isRunning && 'opacity-50 pointer-events-none'
+          )}>
+            <input
+              type="checkbox"
+              checked={options.auto_import}
+              onChange={(e) => setOptions({ ...options, auto_import: e.target.checked })}
+              className="mt-1"
+              disabled={isRunning}
+            />
+            <div>
+              <p className="font-medium text-gray-900">Auto-import to History</p>
+              <p className="text-sm text-gray-500">Automatically import analysis results to the historical database after completion</p>
+            </div>
+          </label>
         </div>
 
         {/* Advanced Options */}

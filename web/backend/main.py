@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 # Add project root to path for importing existing modules
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -71,17 +72,6 @@ def create_app() -> FastAPI:
         """Health check endpoint."""
         return {"status": "healthy", "version": settings.app_version}
     
-    # Root endpoint
-    @app.get("/")
-    async def root():
-        """Root endpoint with API information."""
-        return {
-            "name": settings.app_name,
-            "version": settings.app_version,
-            "docs": "/api/docs",
-            "health": "/health"
-        }
-    
     # Global exception handler
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
@@ -93,6 +83,59 @@ def create_app() -> FastAPI:
                 "type": type(exc).__name__
             }
         )
+    
+    # Serve static frontend files (built React app)
+    frontend_dist = PROJECT_ROOT / "web" / "frontend" / "dist"
+    if frontend_dist.exists():
+        index_html = frontend_dist / "index.html"
+        
+        # Mount static assets directory
+        assets_dir = frontend_dist / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="static-assets")
+        
+        # Serve favicon
+        favicon_path = frontend_dist / "favicon.svg"
+        
+        @app.get("/favicon.svg")
+        async def serve_favicon():
+            """Serve the favicon."""
+            if favicon_path.exists():
+                return FileResponse(favicon_path, media_type="image/svg+xml")
+            return JSONResponse(status_code=404, content={"detail": "Favicon not found"})
+        
+        # Serve index.html at root
+        @app.get("/")
+        async def serve_root():
+            """Serve the React SPA at root."""
+            if index_html.exists():
+                return FileResponse(index_html, media_type="text/html")
+            return JSONResponse(status_code=404, content={"detail": "Frontend not built"})
+        
+        # Serve index.html for SPA routing (catch-all for non-API routes)
+        @app.get("/{path:path}")
+        async def serve_spa(path: str):
+            """Serve the React SPA for any non-API route."""
+            # Skip if path starts with 'api' (handled by API router)
+            if path.startswith("api"):
+                return JSONResponse(status_code=404, content={"detail": "Not found"})
+            
+            # Serve index.html for SPA client-side routing
+            if index_html.exists():
+                return FileResponse(index_html, media_type="text/html")
+            return JSONResponse(status_code=404, content={"detail": "Frontend not built"})
+    else:
+        # No frontend built - serve API info at root
+        @app.get("/")
+        async def root():
+            """Root endpoint with API information."""
+            return {
+                "name": settings.app_name,
+                "version": settings.app_version,
+                "docs": "/api/docs",
+                "health": "/health",
+                "note": "Frontend not built. Run 'npm run build' in web/frontend/"
+            }
     
     return app
 
