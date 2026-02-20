@@ -250,10 +250,17 @@ except ImportError:
 
 # normalize_file_path and find_column_by_substring are now imported from utils
 
-def read_csv_file(file_path: str) -> pd.DataFrame:
+def read_csv_file(file_path: str, column_mapping: dict = None) -> pd.DataFrame:
 	"""Read the CSV file into a pandas DataFrame and ensure required columns exist."""
 	try:
 		df = pd.read_csv(file_path)
+		
+		# Apply user-provided column mapping (rename CSV columns to expected names)
+		if column_mapping:
+			rename_map = {v: k for k, v in column_mapping.items() if v in df.columns}
+			if rename_map:
+				df = df.rename(columns=rename_map)
+				print(f"Applied column mapping: {', '.join(f'{old} -> {new}' for old, new in rename_map.items())}")
 		
 		# Define essential columns that must exist
 		# Check for either old or new header name for message body using fuzzy matching
@@ -608,11 +615,11 @@ def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_loc
 
 	return None
 
-def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int = 25, use_local: bool = False, max_workers: int = 5) -> None:
+def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int = 25, use_local: bool = False, max_workers: int = 5, column_mapping: dict = None) -> None:
 	"""Process the CSV file using concurrent threads for improved performance."""
 	try:
 		# Read CSV (input file)
-		df = read_csv_file(input_file)
+		df = read_csv_file(input_file, column_mapping=column_mapping)
 		total_rows = len(df)
 		
 		print(f"🚀 Starting concurrent processing with {max_workers} threads")
@@ -782,6 +789,7 @@ def main():
 	parser.add_argument('-file', '--input-file', type=str, help='Path to the input CSV file')
 	parser.add_argument('--local', action='store_true', help='Use local AI server instead of OpenAI API')
 	parser.add_argument('--threads', type=int, default=50, help='Number of concurrent processing threads (default: 50)')
+	parser.add_argument('--column-mapping', type=str, default=None, help='JSON mapping of CSV column names to expected names (e.g. \'{"my_col": "Expected Col"}\')')
 	args = parser.parse_args()
 	
 	# Get input file path from command line argument or user input
@@ -818,7 +826,16 @@ def main():
 	else:
 		print(f"Using OpenAI API with {MAX_WORKERS} concurrent threads")
 	
-	process_csv(INPUT_FILE, OUTPUT_FILE, API_KEY, BATCH_SIZE, use_local=args.local, max_workers=MAX_WORKERS)
+	# Parse column mapping if provided
+	col_mapping = None
+	if args.column_mapping:
+		try:
+			col_mapping = json.loads(args.column_mapping)
+			print(f"Column mapping provided: {col_mapping}")
+		except json.JSONDecodeError as e:
+			raise ValueError(f"Invalid --column-mapping JSON: {e}")
+	
+	process_csv(INPUT_FILE, OUTPUT_FILE, API_KEY, BATCH_SIZE, use_local=args.local, max_workers=MAX_WORKERS, column_mapping=col_mapping)
 	
 if __name__ == "__main__":
 	main()

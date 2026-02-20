@@ -17,6 +17,42 @@ class AnalysisStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+EXPECTED_COLUMNS = [
+    {"name": "Interaction Message Body", "aliases": ["Ticket Message Body"], "required": True,
+     "description": "Full conversation text of the support ticket"},
+    {"name": "Created Date", "aliases": [], "required": True,
+     "description": "Ticket creation timestamp"},
+    {"name": "CSAT Rating", "aliases": [], "required": False,
+     "description": "Customer satisfaction rating (good/bad)"},
+    {"name": "CSAT Reason", "aliases": [], "required": False,
+     "description": "Reason for the satisfaction rating"},
+    {"name": "CSAT Comment", "aliases": [], "required": False,
+     "description": "Customer's comment about their experience"},
+    {"name": "Tags", "aliases": [], "required": False,
+     "description": "Zendesk tags (used for filtering)"},
+]
+
+
+class ValidateColumnsRequest(BaseModel):
+    """Request to validate CSV columns against expected columns."""
+    columns: List[str]
+
+
+class ColumnMatchInfo(BaseModel):
+    """Info about a single expected column's match status."""
+    expected_name: str
+    matched_column: Optional[str] = None
+    required: bool = False
+    description: str = ""
+
+
+class ValidateColumnsResponse(BaseModel):
+    """Response from column validation."""
+    all_required_matched: bool
+    columns: List[ColumnMatchInfo]
+    available_columns: List[str]
+
+
 class AnalysisOptions(BaseModel):
     """Options for running an analysis."""
     main_analysis: bool = True
@@ -32,6 +68,7 @@ class AnalysisOptions(BaseModel):
     auto_import: bool = True  # Auto-import results to database after analysis
     custom_prompt: Optional[str] = None
     custom_columns: Optional[List[str]] = None
+    column_mapping: Optional[Dict[str, str]] = None
     limit: Optional[int] = None
     threads: int = 50
 
