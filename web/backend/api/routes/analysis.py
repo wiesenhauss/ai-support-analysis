@@ -6,6 +6,7 @@ Provides endpoints for running analyses and tracking progress.
 import sys
 import os
 import uuid
+import json
 import glob
 import asyncio
 from pathlib import Path
@@ -22,13 +23,66 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from web.backend.schemas.analysis import (
     AnalysisStatus, AnalysisOptions, AnalysisJobCreate,
-    AnalysisJobStatus, AnalysisJobResponse
+    AnalysisJobStatus, AnalysisJobResponse,
+    ValidateColumnsRequest, ValidateColumnsResponse, ColumnMatchInfo,
+    EXPECTED_COLUMNS,
 )
 from web.backend.api.deps import require_api_key
 from web.backend.core.config import get_settings
 from web.backend.services.analysis_runner import get_job_manager, AnalysisJobManager
 
 router = APIRouter()
+
+
+def _find_column_match(search_name: str, available_columns: List[str]) -> Optional[str]:
+    """Find a matching column using the same fuzzy logic as the analysis engine."""
+    normalized_search = search_name.strip().lower()
+    for col in available_columns:
+        normalized_col = col.strip().lower()
+        if normalized_search == normalized_col:
+            return col
+    for col in available_columns:
+        normalized_col = col.strip().lower()
+        if normalized_search in normalized_col or normalized_col in normalized_search:
+            return col
+    return None
+
+
+@router.post("/validate-columns", response_model=ValidateColumnsResponse)
+async def validate_columns(request: ValidateColumnsRequest):
+    """
+    Validate CSV columns against expected columns for analysis.
+
+    Returns which expected columns were auto-matched, which are missing,
+    and the full list of available columns for manual mapping.
+    """
+    available = request.columns
+    result_columns: List[ColumnMatchInfo] = []
+
+    for col_def in EXPECTED_COLUMNS:
+        match = _find_column_match(col_def["name"], available)
+        if not match:
+            for alias in col_def.get("aliases", []):
+                match = _find_column_match(alias, available)
+                if match:
+                    break
+
+        result_columns.append(ColumnMatchInfo(
+            expected_name=col_def["name"],
+            matched_column=match,
+            required=col_def["required"],
+            description=col_def["description"],
+        ))
+
+    all_required_matched = all(
+        c.matched_column is not None for c in result_columns if c.required
+    )
+
+    return ValidateColumnsResponse(
+        all_required_matched=all_required_matched,
+        columns=result_columns,
+        available_columns=available,
+    )
 
 
 @router.post("/start", response_model=AnalysisJobResponse)
@@ -48,6 +102,7 @@ async def start_analysis(
     auto_import: bool = Form(True),
     custom_prompt: Optional[str] = Form(None),
     custom_columns: Optional[str] = Form(None),
+    column_mapping: Optional[str] = Form(None),
     limit: Optional[int] = Form(None),
     threads: int = Form(50),
     api_key: str = Depends(require_api_key)
@@ -92,6 +147,14 @@ async def start_analysis(
         if custom_columns:
             parsed_custom_columns = [c.strip() for c in custom_columns.split(',') if c.strip()]
 
+        # Parse column_mapping if provided (JSON string)
+        parsed_column_mapping = None
+        if column_mapping:
+            try:
+                parsed_column_mapping = json.loads(column_mapping)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid column_mapping JSON")
+
         # Create options object
         options = AnalysisOptions(
             main_analysis=main_analysis,
@@ -107,6 +170,7 @@ async def start_analysis(
             auto_import=auto_import,
             custom_prompt=custom_prompt,
             custom_columns=parsed_custom_columns,
+            column_mapping=parsed_column_mapping,
             limit=limit,
             threads=threads
         )

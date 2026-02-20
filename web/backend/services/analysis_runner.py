@@ -5,6 +5,7 @@ Manages background analysis jobs with progress tracking.
 
 import sys
 import os
+import json
 import asyncio
 import subprocess
 import re
@@ -103,6 +104,9 @@ class AnalysisJobManager:
             
             if options.threads:
                 cmd.append(f"--threads={options.threads}")
+            
+            if options.column_mapping:
+                cmd.append(f"--column-mapping={json.dumps(options.column_mapping)}")
             
             # Set environment with API key
             env = os.environ.copy()

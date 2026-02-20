@@ -521,6 +521,11 @@ class AISupportAnalyzerGUI:
         self.custom_prompt = ""
         self.custom_columns = []
         
+        # Column mapping for CSV files with non-standard headers
+        self.column_mapping = {}
+        self.column_validation_result = None
+        self.column_mapping_combos = {}
+        
         # Process control
         self.process = None
         self.is_running = False
@@ -722,9 +727,20 @@ class AISupportAnalyzerGUI:
                                         font=('Arial', 9))
         self.file_info_label.pack(pady=(5, 0))
         
+        # Column Mapping Section (hidden by default, shown when columns need mapping)
+        self.mapping_frame = ttk.LabelFrame(main_frame, text="Column Mapping", padding="10")
+        # Not packed yet -- shown dynamically by _show_column_mapping_ui()
+        
+        self.mapping_status_label = ttk.Label(self.mapping_frame, text="", font=('Arial', 9))
+        self.mapping_status_label.pack(pady=(0, 5))
+        
+        self.mapping_rows_frame = ttk.Frame(self.mapping_frame)
+        self.mapping_rows_frame.pack(fill=tk.X)
+        
         # Analysis Options Section
-        analysis_frame = ttk.LabelFrame(main_frame, text="Analysis Modules", padding="10")
-        analysis_frame.pack(fill=tk.X, pady=(0, 10))
+        self.analysis_frame = ttk.LabelFrame(main_frame, text="Analysis Modules", padding="10")
+        self.analysis_frame.pack(fill=tk.X, pady=(0, 10))
+        analysis_frame = self.analysis_frame
         
         # Analysis descriptions
         analysis_descriptions = {
@@ -989,6 +1005,7 @@ class AISupportAnalyzerGUI:
                     # Store full path internally, display only filename
                     self.input_file_full_path = filename
                     self.input_file_var.set(os.path.basename(filename))
+                    self._reset_column_mapping()
                     self.validate_file(filename)
                     self.log_message(f"📁 File manually entered: {os.path.basename(filename)}")
                 else:
@@ -1045,6 +1062,11 @@ class AISupportAnalyzerGUI:
                         'log_message': f"File loaded: {os.path.basename(filename)} ({size_mb:.1f} MB)",
                         'filename': filename
                     }
+                    
+                    # Also validate columns for analysis compatibility
+                    col_validation = self._validate_csv_columns(filename)
+                    if col_validation is not None:
+                        self.log_queue.put(('column_validation_result', col_validation))
                 else:
                     result = {
                         'success': False,
@@ -1070,6 +1092,169 @@ class AISupportAnalyzerGUI:
         import threading
         validation_thread = threading.Thread(target=validate_thread, daemon=True)
         validation_thread.start()
+    
+    # Expected columns for core analysis, matching main-analysis-process.py
+    EXPECTED_COLUMNS = [
+        {"name": "Interaction Message Body", "aliases": ["Ticket Message Body"], "required": True,
+         "description": "Full conversation text"},
+        {"name": "Created Date", "aliases": [], "required": True,
+         "description": "Ticket creation date"},
+        {"name": "CSAT Rating", "aliases": [], "required": False,
+         "description": "Satisfaction rating"},
+        {"name": "CSAT Reason", "aliases": [], "required": False,
+         "description": "Rating reason"},
+        {"name": "CSAT Comment", "aliases": [], "required": False,
+         "description": "Customer comment"},
+        {"name": "Tags", "aliases": [], "required": False,
+         "description": "Zendesk tags"},
+    ]
+    
+    def _validate_csv_columns(self, filename):
+        """Validate CSV columns against expected columns. Returns validation result dict."""
+        try:
+            df = pd.read_csv(filename, nrows=0)
+            available = list(df.columns)
+        except Exception:
+            return None
+        
+        from utils import find_column_by_substring
+        
+        columns_info = []
+        for col_def in self.EXPECTED_COLUMNS:
+            match = find_column_by_substring(df, col_def["name"])
+            if not match:
+                for alias in col_def.get("aliases", []):
+                    match = find_column_by_substring(df, alias)
+                    if match:
+                        break
+            columns_info.append({
+                "expected_name": col_def["name"],
+                "matched_column": match,
+                "required": col_def["required"],
+                "description": col_def["description"],
+            })
+        
+        all_required_matched = all(
+            c["matched_column"] is not None for c in columns_info if c["required"]
+        )
+        
+        return {
+            "all_required_matched": all_required_matched,
+            "columns": columns_info,
+            "available_columns": available,
+        }
+    
+    def _show_column_mapping_ui(self, validation_result):
+        """Show/update the column mapping UI based on validation results."""
+        self.column_validation_result = validation_result
+        self.column_mapping_combos = {}
+        
+        # Clear existing rows
+        for widget in self.mapping_rows_frame.winfo_children():
+            widget.destroy()
+        
+        if validation_result is None:
+            self._hide_column_mapping_ui()
+            return
+        
+        columns_info = validation_result["columns"]
+        available = [""] + validation_result["available_columns"]
+        
+        # Header row
+        header = ttk.Frame(self.mapping_rows_frame)
+        header.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(header, text="Expected Column", font=('Arial', 9, 'bold'), width=28, anchor='w').pack(side=tk.LEFT)
+        ttk.Label(header, text="→", width=3, anchor='center').pack(side=tk.LEFT)
+        ttk.Label(header, text="Your CSV Column", font=('Arial', 9, 'bold'), width=30, anchor='w').pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Separate required and optional
+        required_cols = [c for c in columns_info if c["required"]]
+        optional_cols = [c for c in columns_info if not c["required"]]
+        
+        for col_info in required_cols + optional_cols:
+            row = ttk.Frame(self.mapping_rows_frame)
+            row.pack(fill=tk.X, pady=2)
+            
+            label_text = col_info["expected_name"]
+            if col_info["required"]:
+                label_text += " *"
+            
+            lbl = ttk.Label(row, text=label_text, width=28, anchor='w')
+            lbl.pack(side=tk.LEFT)
+            if col_info["required"] and not col_info["matched_column"]:
+                lbl.configure(foreground='red')
+            elif col_info["matched_column"]:
+                lbl.configure(foreground='green')
+            
+            ttk.Label(row, text="→", width=3, anchor='center').pack(side=tk.LEFT)
+            
+            combo = ttk.Combobox(row, values=available, width=35, state='readonly')
+            combo.pack(side=tk.LEFT, padx=(5, 0))
+            
+            if col_info["matched_column"]:
+                combo.set(col_info["matched_column"])
+            else:
+                combo.set("")
+            
+            combo.bind('<<ComboboxSelected>>', lambda e: self._on_column_mapping_changed())
+            self.column_mapping_combos[col_info["expected_name"]] = combo
+            
+            # Status indicator
+            if col_info["matched_column"]:
+                ttk.Label(row, text="✓", foreground='green', font=('Arial', 10)).pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Optional separator
+        if required_cols and optional_cols:
+            sep_frame = ttk.Frame(self.mapping_rows_frame)
+            sep_frame.pack(fill=tk.X, pady=(4, 4))
+            ttk.Separator(sep_frame, orient='horizontal').pack(fill=tk.X)
+            ttk.Label(sep_frame, text="Optional columns (analysis continues without these)", 
+                      font=('Arial', 8), foreground='gray').pack(anchor='w')
+        
+        # Update status and show
+        self._on_column_mapping_changed()
+        
+        # Pack the mapping frame before the analysis frame
+        self.mapping_frame.pack(fill=tk.X, pady=(0, 10), before=self.analysis_frame)
+    
+    def _hide_column_mapping_ui(self):
+        """Hide the column mapping UI."""
+        self.mapping_frame.pack_forget()
+        self.column_mapping = {}
+        self.column_validation_result = None
+        self.column_mapping_combos = {}
+    
+    def _on_column_mapping_changed(self):
+        """Called when a combobox value changes. Updates mapping state and status label."""
+        mapping = {}
+        for expected_name, combo in self.column_mapping_combos.items():
+            val = combo.get()
+            if val:
+                mapping[expected_name] = val
+        self.column_mapping = mapping
+        
+        # Check required columns
+        if self.column_validation_result:
+            required = [c for c in self.column_validation_result["columns"] if c["required"]]
+            unmapped_required = [c["expected_name"] for c in required if c["expected_name"] not in mapping]
+            
+            if unmapped_required:
+                self.mapping_status_label.config(
+                    text=f"⚠️  {len(unmapped_required)} required column(s) need mapping: {', '.join(unmapped_required)}",
+                    foreground='red'
+                )
+            else:
+                self.mapping_status_label.config(
+                    text="✅ All required columns are mapped",
+                    foreground='green'
+                )
+    
+    def _reset_column_mapping(self):
+        """Reset column mapping state and hide the UI."""
+        self.column_mapping = {}
+        self.column_validation_result = None
+        self.column_mapping_combos = {}
+        self._hide_column_mapping_ui()
             
     def on_limit_change(self, event):
         """Handle limit selection change."""  
@@ -1100,6 +1285,21 @@ class AISupportAnalyzerGUI:
         if not os.path.exists(self.input_file_full_path):
             messagebox.showerror("Error", "Selected file does not exist")
             return
+        
+        # Check column mapping if core analysis is selected
+        if self.analysis_options['main_analysis'].get() and self.column_validation_result:
+            # Refresh mapping from current combobox values
+            self._on_column_mapping_changed()
+            required = [c for c in self.column_validation_result["columns"] if c["required"]]
+            unmapped = [c["expected_name"] for c in required 
+                        if c["expected_name"] not in self.column_mapping]
+            if unmapped:
+                bullet_list = "\n".join(f"• {name}" for name in unmapped)
+                messagebox.showerror("Column Mapping Required", 
+                    f"The following required columns are not mapped:\n\n"
+                    f"{bullet_list}\n\n"
+                    "Please map them in the Column Mapping section above.")
+                return
             
         # Check if any analysis is selected
         if not any(var.get() for var in self.analysis_options.values()):
@@ -1278,7 +1478,10 @@ class AISupportAnalyzerGUI:
                     print(f"[DEBUG] Cancelled before main-analysis", flush=True)
                     return False
                 print(f"[DEBUG] About to run main-analysis-process.py with file: {current_file}", flush=True)
-                if not self.run_python_script("main-analysis-process.py", [f"-file={current_file}", f"--threads={concurrent_threads}"]):
+                analysis_args = [f"-file={current_file}", f"--threads={concurrent_threads}"]
+                if self.column_mapping:
+                    analysis_args.append(f"--column-mapping={json.dumps(self.column_mapping)}")
+                if not self.run_python_script("main-analysis-process.py", analysis_args):
                     return False
                 
                 # Aggressive memory cleanup after main analysis (largest memory user)
@@ -1912,6 +2115,7 @@ class AISupportAnalyzerGUI:
                     # Store full path internally, display only filename
                     self.input_file_full_path = message
                     self.input_file_var.set(os.path.basename(message))
+                    self._reset_column_mapping()
                     self.validate_file(message)
                     self.log_message(f"📁 File selected: {os.path.basename(message)}")
                     
@@ -1947,6 +2151,16 @@ class AISupportAnalyzerGUI:
                         self.update_talk_to_data_button(result['filename'])
                     else:
                         self.talk_to_data_button.config(state=tk.DISABLED)
+                
+                elif msg_type == 'column_validation_result':
+                    # Show or hide column mapping UI based on validation
+                    self._show_column_mapping_ui(message)
+                    if not message["all_required_matched"]:
+                        unmatched = [c["expected_name"] for c in message["columns"] 
+                                     if c["required"] and not c["matched_column"]]
+                        self.log_message(f"⚠️  Required columns not found: {', '.join(unmatched)} — please map them below")
+                    else:
+                        self.log_message("✅ All expected columns detected in CSV")
                     
         except queue.Empty:
             pass
@@ -2098,6 +2312,9 @@ class AISupportAnalyzerGUI:
             
             # Update display to show only filename
             self.input_file_var.set(os.path.basename(normalized_path))
+            
+            # Reset column mapping for new file
+            self._reset_column_mapping()
             
             # Validate the file
             if os.path.exists(normalized_path):

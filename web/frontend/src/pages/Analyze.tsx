@@ -3,8 +3,9 @@ import { Card, CardHeader } from '@/components/Card'
 import Alert from '@/components/Alert'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import CustomAnalysisDialog from '@/components/CustomAnalysisDialog'
+import ColumnMappingCard from '@/components/ColumnMappingCard'
 import { cn } from '@/lib/utils'
-import api, { OutputFile } from '@/api/client'
+import api, { OutputFile, ValidateColumnsResponse } from '@/api/client'
 import { Upload, FileText, X, Play, Square, CheckCircle, AlertCircle, Download, Settings } from 'lucide-react'
 
 interface AnalysisOptions {
@@ -59,6 +60,9 @@ export default function Analyze() {
   const [customPrompt, setCustomPrompt] = useState<string>('')
   const [customColumns, setCustomColumns] = useState<string[]>([])
   const [csvColumns, setCsvColumns] = useState<string[]>([])
+  const [columnValidation, setColumnValidation] = useState<ValidateColumnsResponse | null>(null)
+  const [columnMapping, setColumnMapping] = useState<Record<string, string>>({})
+  const [validatingColumns, setValidatingColumns] = useState(false)
   const pollInterval = useRef<number | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
@@ -82,6 +86,8 @@ export default function Analyze() {
   useEffect(() => {
     if (!file) {
       setCsvColumns([])
+      setColumnValidation(null)
+      setColumnMapping({})
       return
     }
 
@@ -101,6 +107,38 @@ export default function Analyze() {
 
     parseColumns()
   }, [file])
+
+  // Validate columns against expected schema when CSV columns are parsed
+  useEffect(() => {
+    if (csvColumns.length === 0) {
+      setColumnValidation(null)
+      return
+    }
+
+    const validate = async () => {
+      setValidatingColumns(true)
+      try {
+        const result = await api.analysis.validateColumns(csvColumns)
+        setColumnValidation(result)
+      } catch (err) {
+        console.error('Failed to validate columns:', err)
+      } finally {
+        setValidatingColumns(false)
+      }
+    }
+
+    validate()
+  }, [csvColumns])
+
+  const handleColumnMappingChange = useCallback((mapping: Record<string, string>) => {
+    setColumnMapping(mapping)
+  }, [])
+
+  const hasUnmappedRequiredColumns = columnValidation
+    ? columnValidation.columns
+        .filter((c) => c.required)
+        .some((c) => !columnMapping[c.expected_name])
+    : false
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -161,11 +199,16 @@ export default function Analyze() {
 
     setError(null)
     try {
-      // Build options with custom prompt if configured
+      // Build column mapping: only include entries where the CSV column differs from the expected name
+      const effectiveMapping: Record<string, string> | undefined =
+        Object.keys(columnMapping).length > 0 ? columnMapping : undefined
+
+      // Build options with custom prompt and column mapping if configured
       const analysisOptions = {
         ...options,
         custom_prompt: customPrompt || undefined,
         custom_columns: customColumns.length > 0 ? customColumns.join(',') : undefined,
+        column_mapping: effectiveMapping,
       }
       const response = await api.analysis.start(file, analysisOptions) as { job_id: string; status: JobStatus }
       
@@ -309,6 +352,23 @@ export default function Analyze() {
         </div>
       </Card>
 
+      {/* Column Mapping */}
+      {file && validatingColumns && (
+        <Card>
+          <div className="flex items-center gap-3 py-4">
+            <LoadingSpinner size="sm" />
+            <span className="text-sm text-gray-500">Validating CSV columns...</span>
+          </div>
+        </Card>
+      )}
+      {file && columnValidation && !validatingColumns && (
+        <ColumnMappingCard
+          validationResult={columnValidation}
+          onMappingChange={handleColumnMappingChange}
+          disabled={isRunning}
+        />
+      )}
+
       {/* Analysis Options */}
       <Card>
         <CardHeader title="Analysis Options" description="Select which analyses to run" />
@@ -413,7 +473,7 @@ export default function Analyze() {
         ) : (
           <button
             onClick={startAnalysis}
-            disabled={!file}
+            disabled={!file || hasUnmappedRequiredColumns}
             className="btn btn-primary"
           >
             <Play className="w-4 h-4 mr-2" />

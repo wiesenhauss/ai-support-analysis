@@ -22,6 +22,19 @@ export interface CustomPrompt {
   last_used?: string
 }
 
+export interface ColumnMatchInfo {
+  expected_name: string
+  matched_column: string | null
+  required: boolean
+  description: string
+}
+
+export interface ValidateColumnsResponse {
+  all_required_matched: boolean
+  columns: ColumnMatchInfo[]
+  available_columns: string[]
+}
+
 export interface AdvancedSettings {
   api_timeout: number
   max_retries: number
@@ -230,12 +243,26 @@ export const api = {
 
   // Analysis endpoints
   analysis: {
+    validateColumns: async (columns: string[]): Promise<ValidateColumnsResponse> => {
+      return handleResponse(
+        await fetch(`${API_BASE}/analysis/validate-columns`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ columns }),
+        })
+      )
+    },
+
     start: async (file: File, options: Record<string, unknown>) => {
       const formData = new FormData()
       formData.append('file', file)
       Object.entries(options).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {
-          formData.append(key, String(value))
+          if (key === 'column_mapping' && typeof value === 'object') {
+            formData.append(key, JSON.stringify(value))
+          } else {
+            formData.append(key, String(value))
+          }
         }
       })
       return handleResponse(
