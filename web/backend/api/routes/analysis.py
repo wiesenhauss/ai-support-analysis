@@ -25,7 +25,7 @@ from web.backend.schemas.analysis import (
     AnalysisStatus, AnalysisOptions, AnalysisJobCreate,
     AnalysisJobStatus, AnalysisJobResponse,
     ValidateColumnsRequest, ValidateColumnsResponse, ColumnMatchInfo,
-    EXPECTED_COLUMNS,
+    ReportImpact, EXPECTED_COLUMNS, COLUMN_REPORT_IMPACT,
 )
 from web.backend.api.deps import require_api_key
 from web.backend.core.config import get_settings
@@ -78,10 +78,22 @@ async def validate_columns(request: ValidateColumnsRequest):
         c.matched_column is not None for c in result_columns if c.required
     )
 
+    report_impacts: List[ReportImpact] = []
+    for col_info in result_columns:
+        if not col_info.required and col_info.matched_column is None:
+            impacts = COLUMN_REPORT_IMPACT.get(col_info.expected_name, [])
+            for entry in impacts:
+                report_impacts.append(ReportImpact(
+                    report=entry["report"],
+                    impact=entry["impact"],
+                    missing_column=col_info.expected_name,
+                ))
+
     return ValidateColumnsResponse(
         all_required_matched=all_required_matched,
         columns=result_columns,
         available_columns=available,
+        report_impacts=report_impacts,
     )
 
 

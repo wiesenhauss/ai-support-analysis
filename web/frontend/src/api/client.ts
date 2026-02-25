@@ -29,10 +29,17 @@ export interface ColumnMatchInfo {
   description: string
 }
 
+export interface ReportImpact {
+  report: string
+  impact: string
+  missing_column: string
+}
+
 export interface ValidateColumnsResponse {
   all_required_matched: boolean
   columns: ColumnMatchInfo[]
   available_columns: string[]
+  report_impacts: ReportImpact[]
 }
 
 export interface AdvancedSettings {

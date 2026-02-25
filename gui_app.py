@@ -744,7 +744,7 @@ class AISupportAnalyzerGUI:
         
         # Analysis descriptions
         analysis_descriptions = {
-            'main_analysis': 'Core CSAT & Sentiment Analysis',
+            'main_analysis': 'Core Analysis',
             'data_cleanup': 'Data Cleanup & Validation',
             'predict_csat': 'CSAT Prediction Analysis',
             'topic_aggregator': 'Topic Categorization',
@@ -1108,6 +1108,24 @@ class AISupportAnalyzerGUI:
         {"name": "Tags", "aliases": [], "required": False,
          "description": "Zendesk tags"},
     ]
+
+    COLUMN_REPORT_IMPACT = {
+        "CSAT Rating": [
+            {"report": "CSAT Trend Analysis", "impact": "CSAT correlation data will be unavailable"},
+            {"report": "Topic Aggregation", "impact": "CSAT breakdown per topic will be limited"},
+        ],
+        "CSAT Reason": [
+            {"report": "CSAT Trend Analysis", "impact": "Reason-based analysis will be unavailable"},
+            {"report": "Topic Aggregation", "impact": "CSAT reason context will be missing"},
+        ],
+        "CSAT Comment": [
+            {"report": "CSAT Trend Analysis", "impact": "Customer comment analysis will be unavailable"},
+            {"report": "Topic Aggregation", "impact": "CSAT comment context will be missing"},
+        ],
+        "Tags": [
+            {"report": "Main Analysis", "impact": "Auto-merged ticket filtering will be skipped"},
+        ],
+    }
     
     def _validate_csv_columns(self, filename):
         """Validate CSV columns against expected columns. Returns validation result dict."""
@@ -1137,11 +1155,23 @@ class AISupportAnalyzerGUI:
         all_required_matched = all(
             c["matched_column"] is not None for c in columns_info if c["required"]
         )
+
+        report_impacts = []
+        for col_info in columns_info:
+            if not col_info["required"] and col_info["matched_column"] is None:
+                impacts = self.COLUMN_REPORT_IMPACT.get(col_info["expected_name"], [])
+                for entry in impacts:
+                    report_impacts.append({
+                        "report": entry["report"],
+                        "impact": entry["impact"],
+                        "missing_column": col_info["expected_name"],
+                    })
         
         return {
             "all_required_matched": all_required_matched,
             "columns": columns_info,
             "available_columns": available,
+            "report_impacts": report_impacts,
         }
     
     def _show_column_mapping_ui(self, validation_result):
@@ -1244,10 +1274,26 @@ class AISupportAnalyzerGUI:
                     foreground='red'
                 )
             else:
-                self.mapping_status_label.config(
-                    text="✅ All required columns are mapped",
-                    foreground='green'
-                )
+                optional = [c for c in self.column_validation_result["columns"] if not c["required"]]
+                unmapped_optional = [c["expected_name"] for c in optional if c["expected_name"] not in mapping]
+                if unmapped_optional:
+                    report_impacts = self.column_validation_result.get("report_impacts", [])
+                    active_impacts = [ri for ri in report_impacts
+                                      if ri["missing_column"] in unmapped_optional]
+                    affected_reports = sorted(set(ri["report"] for ri in active_impacts))
+                    if affected_reports:
+                        status_text = f"✅ Ready — {', '.join(affected_reports)} will have limited data without: {', '.join(unmapped_optional)}"
+                        self.mapping_status_label.config(text=status_text, foreground='#b45309')
+                    else:
+                        self.mapping_status_label.config(
+                            text="✅ All required columns are mapped",
+                            foreground='green'
+                        )
+                else:
+                    self.mapping_status_label.config(
+                        text="✅ All columns are mapped",
+                        foreground='green'
+                    )
     
     def _reset_column_mapping(self):
         """Reset column mapping state and hide the UI."""
@@ -1300,7 +1346,31 @@ class AISupportAnalyzerGUI:
                     f"{bullet_list}\n\n"
                     "Please map them in the Column Mapping section above.")
                 return
-            
+
+            # Check for unmapped optional columns and warn about affected reports
+            optional = [c for c in self.column_validation_result["columns"] if not c["required"]]
+            unmapped_optional = [c["expected_name"] for c in optional
+                                if c["expected_name"] not in self.column_mapping]
+            if unmapped_optional:
+                report_impacts = self.column_validation_result.get("report_impacts", [])
+                active_impacts = [ri for ri in report_impacts
+                                  if ri["missing_column"] in unmapped_optional]
+                msg = "The following optional columns are not mapped:\n\n"
+                msg += "\n".join(f"• {name}" for name in unmapped_optional)
+                if active_impacts:
+                    reports_grouped = {}
+                    for ri in active_impacts:
+                        reports_grouped.setdefault(ri["report"], []).append(ri["impact"])
+                    msg += "\n\nAffected reports:\n"
+                    for report, impacts in reports_grouped.items():
+                        msg += f"\n  {report}:\n"
+                        for impact in impacts:
+                            msg += f"    – {impact}\n"
+                msg += "\nThe analysis will still run, but some reports may have limited results.\n\n"
+                msg += "Do you want to continue?"
+                if not messagebox.askyesno("Missing Optional Columns", msg):
+                    return
+
         # Check if any analysis is selected
         if not any(var.get() for var in self.analysis_options.values()):
             messagebox.showerror("Error", "Please select at least one analysis module")
@@ -1333,7 +1403,7 @@ class AISupportAnalyzerGUI:
         if not core_selected and (cleanup_selected or prediction_selected or topic_selected):
             result = messagebox.askyesno("Loading Pre-Analyzed File?", 
                                        "You've selected analysis modules that typically require core analysis, "
-                                       "but 'Core CSAT & Sentiment Analysis' is not selected.\n\n"
+                                       "but 'Core Analysis' is not selected.\n\n"
                                        "This suggests you're loading a file that has already been processed.\n\n"
                                        "Is your input file already analyzed (contains columns like CSAT_RATING, "
                                        "OVERALL_SENTIMENT, etc.)?\n\n"
@@ -2886,7 +2956,7 @@ Questions? Reach out to @wiesenhauss in Slack :)"""
 6. Click "Start Analysis" and wait for completion
 
 📋 ANALYSIS MODULES:
-✅ Core CSAT & Sentiment Analysis - Main AI analysis of customer satisfaction
+✅ Core Analysis - Main AI analysis of customer satisfaction
 ✅ Data Cleanup & Validation - Removes spam and invalid entries  
 ✅ CSAT Prediction Analysis - Predicts satisfaction scores
 ✅ Topic Categorization - Groups tickets by subject matter

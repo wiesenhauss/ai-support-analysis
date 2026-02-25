@@ -1,14 +1,15 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Card, CardHeader } from '@/components/Card'
 import { cn } from '@/lib/utils'
-import { CheckCircle, AlertCircle, ArrowRight, Columns } from 'lucide-react'
-import type { ColumnMatchInfo } from '@/api/client'
+import { CheckCircle, AlertCircle, AlertTriangle, ArrowRight, Columns } from 'lucide-react'
+import type { ColumnMatchInfo, ReportImpact } from '@/api/client'
 
 interface ColumnMappingCardProps {
   validationResult: {
     all_required_matched: boolean
     columns: ColumnMatchInfo[]
     available_columns: string[]
+    report_impacts: ReportImpact[]
   }
   onMappingChange: (mapping: Record<string, string>) => void
   disabled?: boolean
@@ -19,7 +20,7 @@ export default function ColumnMappingCard({
   onMappingChange,
   disabled = false,
 }: ColumnMappingCardProps) {
-  const { columns, available_columns } = validationResult
+  const { columns, available_columns, report_impacts } = validationResult
 
   const [userSelections, setUserSelections] = useState<Record<string, string>>({})
 
@@ -64,6 +65,11 @@ export default function ColumnMappingCard({
   const optionalColumns = columns.filter((c) => !c.required)
   const unmatchedRequired = requiredColumns.filter((c) => !userSelections[c.expected_name])
   const unmatchedOptional = optionalColumns.filter((c) => !userSelections[c.expected_name])
+
+  const activeReportImpacts = useMemo(() => {
+    const unmappedNames = new Set(unmatchedOptional.map((c) => c.expected_name))
+    return report_impacts.filter((ri) => unmappedNames.has(ri.missing_column))
+  }, [report_impacts, unmatchedOptional])
 
   return (
     <Card>
@@ -133,11 +139,35 @@ export default function ColumnMappingCard({
         ))}
       </div>
 
-      {/* Info about unmapped optional columns */}
+      {/* Info about unmapped optional columns and affected reports */}
       {unmatchedOptional.length > 0 && allRequiredMapped && (
-        <p className="text-xs text-gray-500 mt-4 px-3">
-          Unmapped optional columns will be created with empty values. Analysis will continue with available data.
-        </p>
+        <div className="mt-4 px-3 space-y-2">
+          {activeReportImpacts.length > 0 ? (
+            <div className="flex items-start gap-2 p-2.5 bg-warning-50 rounded-lg">
+              <AlertTriangle className="w-4 h-4 text-warning-500 mt-0.5 flex-shrink-0" />
+              <div className="text-xs text-warning-700">
+                <p className="font-medium">Some reports will have limited data:</p>
+                <ul className="mt-1 space-y-0.5">
+                  {Object.entries(
+                    activeReportImpacts.reduce<Record<string, string[]>>((acc, ri) => {
+                      if (!acc[ri.report]) acc[ri.report] = []
+                      acc[ri.report].push(ri.impact)
+                      return acc
+                    }, {})
+                  ).map(([report, impacts]) => (
+                    <li key={report}>
+                      <span className="font-medium">{report}</span>: {impacts.join('; ')}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">
+              Unmapped optional columns will be created with empty values. Analysis will continue with available data.
+            </p>
+          )}
+        </div>
       )}
     </Card>
   )

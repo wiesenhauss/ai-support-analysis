@@ -32,6 +32,31 @@ EXPECTED_COLUMNS = [
      "description": "Zendesk tags (used for filtering)"},
 ]
 
+COLUMN_REPORT_IMPACT: Dict[str, List[Dict[str, str]]] = {
+    "CSAT Rating": [
+        {"report": "CSAT Trend Analysis", "impact": "CSAT correlation data will be unavailable"},
+        {"report": "Topic Aggregation", "impact": "CSAT breakdown per topic will be limited"},
+    ],
+    "CSAT Reason": [
+        {"report": "CSAT Trend Analysis", "impact": "Reason-based analysis will be unavailable"},
+        {"report": "Topic Aggregation", "impact": "CSAT reason context will be missing"},
+    ],
+    "CSAT Comment": [
+        {"report": "CSAT Trend Analysis", "impact": "Customer comment analysis will be unavailable"},
+        {"report": "Topic Aggregation", "impact": "CSAT comment context will be missing"},
+    ],
+    "Tags": [
+        {"report": "Main Analysis", "impact": "Auto-merged ticket filtering will be skipped"},
+    ],
+}
+
+
+class ReportImpact(BaseModel):
+    """Impact of a missing column on a specific report."""
+    report: str
+    impact: str
+    missing_column: str
+
 
 class ValidateColumnsRequest(BaseModel):
     """Request to validate CSV columns against expected columns."""
@@ -51,6 +76,7 @@ class ValidateColumnsResponse(BaseModel):
     all_required_matched: bool
     columns: List[ColumnMatchInfo]
     available_columns: List[str]
+    report_impacts: List[ReportImpact] = Field(default_factory=list)
 
 
 class AnalysisOptions(BaseModel):
