@@ -80,24 +80,36 @@ def read_csv_data(file_path: str) -> pd.DataFrame:
         df = pd.read_csv(file_path)
         required_columns = [
             "INTERACTION_TOPICS",
-            "CSAT Reason", 
-            "CSAT Comment", 
             "DETAIL_SUMMARY", 
             "WHAT_HAPPENED",
+        ]
+
+        optional_columns = [
+            "CSAT Reason",
+            "CSAT Comment",
             "CSAT Rating Date",
-            "Zendesk Ticket URL"
+            "Zendesk Ticket URL",
         ]
         
         # Find actual column names using fuzzy matching
-        missing_columns = []
+        missing_required = []
         
         for col in required_columns:
             actual_col = find_column_by_substring(df, col)
             if not actual_col:
-                missing_columns.append(col)
+                missing_required.append(col)
         
-        if missing_columns:
-            raise ValueError(f"Missing required columns: {missing_columns}")
+        if missing_required:
+            raise ValueError(f"Missing required columns: {missing_required}")
+
+        missing_optional = []
+        for col in optional_columns:
+            actual_col = find_column_by_substring(df, col)
+            if not actual_col:
+                missing_optional.append(col)
+
+        if missing_optional:
+            logger.info(f"Optional columns not found (analysis will continue): {missing_optional}")
             
         # Return full DataFrame (not just selected columns) to avoid breaking code
         return df

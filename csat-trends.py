@@ -85,13 +85,10 @@ def read_csv_data(file_path: str) -> pd.DataFrame:
     """
     try:
         df = pd.read_csv(file_path)
-        # Define truly required columns vs optional ones
+        # AI-generated columns are always produced by main-analysis-process.py
         required_columns = [
             "Created Date",
             "Zendesk Ticket URL",
-            "CSAT Rating",
-            "CSAT Reason",
-            "CSAT Comment",
             "SENTIMENT_ANALYSIS",
             "ISSUE_RESOLVED",
             "INTERACTION_TOPICS",
@@ -99,8 +96,11 @@ def read_csv_data(file_path: str) -> pd.DataFrame:
             "RELATED_TO_SERVICE"
         ]
         
-        # Optional columns (may not exist in all CSVs)
+        # CSAT columns may be absent if the original CSV lacked them
         optional_columns = [
+            "CSAT Rating",
+            "CSAT Reason",
+            "CSAT Comment",
             "First reply time without AI (hours)",
             "Total time spent (mins)"
         ]
@@ -117,11 +117,17 @@ def read_csv_data(file_path: str) -> pd.DataFrame:
                 missing_required.append(col)
         
         # Find optional columns if they exist
+        missing_optional = []
         for col in optional_columns:
             actual_col = find_column_by_substring(df, col)
             if actual_col:
                 column_mapping[col] = actual_col
+            else:
+                missing_optional.append(col)
         
+        if missing_optional:
+            logger.info(f"Optional columns not found (analysis will continue): {missing_optional}")
+
         if missing_required:
             raise ValueError(f"Missing required columns: {missing_required}")
         

@@ -6,7 +6,7 @@ import CustomAnalysisDialog from '@/components/CustomAnalysisDialog'
 import ColumnMappingCard from '@/components/ColumnMappingCard'
 import { cn } from '@/lib/utils'
 import api, { OutputFile, ValidateColumnsResponse } from '@/api/client'
-import { Upload, FileText, X, Play, Square, CheckCircle, AlertCircle, Download, Settings } from 'lucide-react'
+import { Upload, FileText, X, Play, Square, CheckCircle, AlertCircle, AlertTriangle, Download, Settings } from 'lucide-react'
 
 interface AnalysisOptions {
   main_analysis: boolean
@@ -63,6 +63,7 @@ export default function Analyze() {
   const [columnValidation, setColumnValidation] = useState<ValidateColumnsResponse | null>(null)
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({})
   const [validatingColumns, setValidatingColumns] = useState(false)
+  const [showMissingColumnsModal, setShowMissingColumnsModal] = useState(false)
   const pollInterval = useRef<number | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
@@ -140,6 +141,12 @@ export default function Analyze() {
         .some((c) => !columnMapping[c.expected_name])
     : false
 
+  const unmappedOptionalColumns = columnValidation
+    ? columnValidation.columns.filter((c) => !c.required && !columnMapping[c.expected_name])
+    : []
+
+  const hasUnmappedOptionalColumns = unmappedOptionalColumns.length > 0
+
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -194,16 +201,15 @@ export default function Analyze() {
     }
   }, [])
 
-  const startAnalysis = async () => {
+  const handleStartAnalysis = async () => {
     if (!file) return
 
+    setShowMissingColumnsModal(false)
     setError(null)
     try {
-      // Build column mapping: only include entries where the CSV column differs from the expected name
       const effectiveMapping: Record<string, string> | undefined =
         Object.keys(columnMapping).length > 0 ? columnMapping : undefined
 
-      // Build options with custom prompt and column mapping if configured
       const analysisOptions = {
         ...options,
         custom_prompt: customPrompt || undefined,
@@ -220,13 +226,21 @@ export default function Analyze() {
         logs: ['Analysis job started'],
       })
 
-      // Start polling
       pollInterval.current = window.setInterval(() => {
         pollJobStatus(response.job_id)
       }, 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start analysis')
     }
+  }
+
+  const startAnalysis = () => {
+    if (!file) return
+    if (hasUnmappedOptionalColumns) {
+      setShowMissingColumnsModal(true)
+      return
+    }
+    handleStartAnalysis()
   }
 
   const cancelAnalysis = async () => {
@@ -623,6 +637,80 @@ export default function Analyze() {
           setOptions({ ...options, custom_analysis: true })
         }}
       />
+
+      {/* Missing Optional Columns Confirmation Modal */}
+      {showMissingColumnsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/50" onClick={() => setShowMissingColumnsModal(false)} />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-warning-100 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-warning-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Missing Optional Columns
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    The following optional columns are not mapped. The analysis will still run, but some reports may have limited results.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {unmappedOptionalColumns.map((col) => (
+                  <div key={col.expected_name} className="flex items-start gap-3 p-3 bg-warning-50 rounded-lg">
+                    <AlertCircle className="w-4 h-4 text-warning-500 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{col.expected_name}</p>
+                      <p className="text-xs text-gray-500">{col.description}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {columnValidation && columnValidation.report_impacts.length > 0 && (
+                <div className="mt-5">
+                  <p className="text-sm font-medium text-gray-700 mb-2">Affected reports:</p>
+                  <div className="space-y-2">
+                    {Object.entries(
+                      columnValidation.report_impacts.reduce<Record<string, string[]>>((acc, ri) => {
+                        if (!acc[ri.report]) acc[ri.report] = []
+                        acc[ri.report].push(ri.impact)
+                        return acc
+                      }, {})
+                    ).map(([report, impacts]) => (
+                      <div key={report} className="p-3 bg-gray-50 rounded-lg">
+                        <p className="text-sm font-medium text-gray-900">{report}</p>
+                        {impacts.map((impact, i) => (
+                          <p key={i} className="text-xs text-gray-500 mt-0.5">{impact}</p>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowMissingColumnsModal(false)}
+                  className="btn btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleStartAnalysis}
+                  className="btn btn-primary"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  Continue Anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
