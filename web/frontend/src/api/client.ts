@@ -12,6 +12,7 @@ export interface CustomTicketAnalysis {
   result_type: 'boolean' | 'string'
   description: string
   columns: string[]
+  enabled?: boolean
 }
 
 export interface CustomPrompt {
