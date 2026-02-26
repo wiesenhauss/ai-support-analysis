@@ -184,7 +184,13 @@ cd ../..
 
 5. **Click "Start Analysis"** and monitor progress
 
+> **Tip:** The Desktop GUI also has an **"Open Web UI"** button that launches the full Web UI in your browser with a single click — no need to start servers manually.
+
 ### Option 2: Web UI (Best for Teams)
+
+**Quick launch from Desktop GUI:** Click the **"Open Web UI"** button — it starts the backend server automatically and opens your browser.
+
+**Manual launch (for development):**
 
 1. **Start the backend:**
    ```bash
@@ -208,10 +214,11 @@ cd ../..
 # Set your API key
 export OPENAI_API_KEY="sk-proj-your-key-here"
 
-# Run main analysis
-python main-analysis-process.py -file="data/support-tickets.csv"
+# Run the full pipeline with the orchestrator (recommended)
+python orchestrator.py -file="data/support-tickets.csv"
 
-# Run follow-up analyses
+# Or run individual stages manually
+python main-analysis-process.py -file="data/support-tickets.csv"
 python predict_csat.py -file="support-analysis-output_*.csv"
 python topic-aggregator.py -file="support-analysis-output-predictive-csat_*.csv"
 python csat-trends.py -file="support-analysis-output-predictive-csat_*.csv"
@@ -234,6 +241,8 @@ python csat-trends.py -file="support-analysis-output-predictive-csat_*.csv"
 - 💾 **Settings Persistence** - Remember your preferences
 - 📤 **Export/Import** - Share analysis history with team members
 - 🔧 **Custom Analyses** - Define your own per-ticket AI analyses
+- 🌐 **One-Click Web UI** - Launch the Web UI directly from the desktop app
+- 🔄 **CSV Column Mapping** - Map non-standard CSV columns to expected names via dropdown selectors
 
 </details>
 
@@ -268,6 +277,8 @@ The GUI provides:
 - 💡 **Insights** - AI-generated insights, anomaly detection, recommendations
 - 💬 **Talk to Data** - Chat interface for natural language queries
 - ⚙️ **Settings** - API key configuration, database management, import history
+- 🔄 **CSV Column Mapping** - Map non-standard CSV columns with fuzzy matching suggestions
+- 💾 **Auto-Import to History** - Automatically import analysis results into the database (enabled by default)
 
 </details>
 
@@ -288,18 +299,80 @@ The GUI provides:
 <details>
 <summary><b>API Endpoints</b></summary>
 
+**Analysis**
 ```
-GET  /api/analytics/summary          - Summary statistics
-GET  /api/analytics/sentiment-trend   - Sentiment over time
-GET  /api/analytics/topic-distribution - Topic breakdown
-GET  /api/insights/weekly             - Week-over-week insights
-GET  /api/insights/anomalies          - Detected anomalies
-POST /api/analysis/start              - Start new analysis
-POST /api/data/import                 - Import analyzed CSV
-POST /api/talk/question               - Ask a data question
+POST /api/analysis/validate-columns      - Validate & fuzzy-match CSV columns
+POST /api/analysis/start                 - Start new analysis (with column mapping & auto-import options)
+GET  /api/analysis/{job_id}/status       - Poll job status
+GET  /api/analysis/{job_id}/logs         - Stream job logs
+GET  /api/analysis/{job_id}/files        - List output files
+GET  /api/analysis/{job_id}/files/{name} - Download an output file
+DELETE /api/analysis/{job_id}            - Cancel a running job
+GET  /api/analysis/                      - List all jobs
 ```
 
-Full API documentation available at `http://localhost:8000/api/docs`
+**Analytics**
+```
+GET  /api/analytics/summary              - Summary statistics
+GET  /api/analytics/sentiment-distribution - Sentiment breakdown
+GET  /api/analytics/sentiment-trend      - Sentiment over time
+GET  /api/analytics/topic-distribution   - Topic breakdown
+GET  /api/analytics/topic-trend          - Topic changes over time
+GET  /api/analytics/csat-distribution    - CSAT score distribution
+GET  /api/analytics/csat-trend           - CSAT over time
+GET  /api/analytics/resolution-rate      - Resolution rate
+GET  /api/analytics/resolution-trend     - Resolution rate over time
+GET  /api/analytics/compare-periods      - Compare two time periods
+```
+
+**Data**
+```
+GET  /api/data/stats                     - Database statistics
+GET  /api/data/batches                   - List import batches
+DELETE /api/data/batches/{batch_id}      - Delete a batch
+POST /api/data/import                    - Import analyzed CSV
+GET  /api/data/tickets                   - Search/filter tickets
+GET  /api/data/date-range                - Available date range
+GET  /api/data/topics                    - List all topics
+GET  /api/data/product-areas             - List all product areas
+GET  /api/data/export-database           - Export full database
+POST /api/data/import-database           - Import database backup
+```
+
+**Insights**
+```
+GET  /api/insights/weekly                - Week-over-week insights
+GET  /api/insights/monthly               - Month-over-month insights
+GET  /api/insights/emerging-topics       - Emerging product insights
+POST /api/insights/compare               - Compare custom periods
+GET  /api/insights/anomalies             - Detected anomalies
+```
+
+**Talk to Data**
+```
+POST /api/talk/question                  - Ask a natural language question
+GET  /api/talk/columns                   - Available data columns
+POST /api/talk/reset                     - Reset conversation context
+```
+
+**Settings**
+```
+GET  /api/settings/                      - Current settings
+GET  /api/settings/api-key/status        - API key status
+POST /api/settings/api-key               - Set API key
+DELETE /api/settings/api-key             - Remove API key
+POST /api/settings/api-key/validate      - Validate an API key
+GET  /api/settings/custom-ticket-analyses - List custom analyses
+POST /api/settings/custom-ticket-analyses - Create custom analysis
+DELETE /api/settings/custom-ticket-analyses/{name} - Delete custom analysis
+GET  /api/settings/custom-prompts        - List custom prompts
+POST /api/settings/custom-prompts/{name} - Create/update custom prompt
+DELETE /api/settings/custom-prompts/{name} - Delete custom prompt
+GET  /api/settings/advanced              - Advanced settings
+POST /api/settings/advanced              - Update advanced settings
+```
+
+Full interactive API documentation available at `http://localhost:8000/api/docs` (Swagger UI).
 
 </details>
 
@@ -450,20 +523,32 @@ Your CSV file should include these columns:
 |--------|-------------|---------|
 | `Created Date` | Ticket creation timestamp | `2024-01-15 10:30:00` |
 | `Interaction Message Body` | Full conversation text | (support conversation) |
-| `CSAT Rating` | Customer satisfaction rating | `good`, `bad`, or empty |
-| `CSAT Reason` | Reason for rating | `helpful`, `not-resolved`, etc. |
-| `CSAT Comment` | Customer's comment | "The agent was very helpful!" |
-| `Tags` | Zendesk tags | `refund, billing, urgent` |
 
-### Optional Columns
+### Optional CSV Columns
 
-| Column | Purpose |
-|--------|---------|
-| `Ticket ID` | Unique identifier |
-| `Assignee` | Support agent name |
-| `Group` | Support team |
-| `Priority` | Ticket priority |
-| `Channel` | Contact method (email, chat) |
+These columns enhance the analysis but are not required. If they are missing, the tool will proceed gracefully and report which analyses will have limited data (e.g., CSAT trend reports are skipped when CSAT columns are absent).
+
+| Column | Purpose | Impact When Missing |
+|--------|---------|---------------------|
+| `CSAT Rating` | Customer satisfaction rating | CSAT trends and prediction unavailable |
+| `CSAT Reason` | Reason for rating | CSAT driver analysis limited |
+| `CSAT Comment` | Customer's comment | Comment-based insights unavailable |
+| `Tags` | Zendesk tags | Tag-based sentiment comparison unavailable |
+| `Ticket ID` | Unique identifier | Deduplication uses row hash instead |
+| `Assignee` | Support agent name | Per-agent breakdown unavailable |
+| `Group` | Support team | Per-team breakdown unavailable |
+| `Priority` | Ticket priority | Priority-based filtering unavailable |
+| `Channel` | Contact method (email, chat) | Channel breakdown unavailable |
+
+### CSV Column Mapping
+
+If your CSV uses different column names (e.g., `Date Created` instead of `Created Date`), the tool can map them automatically:
+
+- **Desktop GUI** - A mapping panel with dropdown selectors appears when column names don't match. Required columns must be mapped before analysis can start.
+- **Web UI** - The `ColumnMappingCard` component uses fuzzy matching to suggest mappings and lets you confirm or adjust them.
+- **CLI** - Pass a JSON mapping via the `--column-mapping` argument to `main-analysis-process.py`.
+
+Both interfaces validate columns on file load and show which mappings are required vs. optional.
 
 ### Data Export
 
@@ -589,6 +674,7 @@ Contains:
 ```
 ai-support-analysis/
 ├── gui_app.py                      # Desktop GUI application
+├── orchestrator.py                 # CLI pipeline orchestrator (runs all stages in sequence)
 ├── main-analysis-process.py        # Core AI analysis engine
 ├── custom_ticket_analysis.py       # Custom per-ticket analyses
 ├── predict_csat.py                 # CSAT prediction
@@ -602,7 +688,7 @@ ai-support-analysis/
 ├── utils.py                        # Shared utilities
 ├── web/
 │   ├── backend/                    # FastAPI backend
-│   │   ├── main.py
+│   │   ├── main.py                # App entry point (also serves built frontend)
 │   │   ├── api/routes/            # API endpoints
 │   │   ├── core/                  # Configuration
 │   │   ├── schemas/               # Pydantic models
@@ -750,8 +836,9 @@ python -m pytest tests/
 **Problem:** "Missing required columns" error
 
 **Solution:**
-- Verify your CSV has all required columns (see [Data Requirements](#data-requirements))
-- Check column names match exactly (case-sensitive)
+- Use the **column mapping** feature to map your CSV columns to the expected names (see [CSV Column Mapping](#csv-column-mapping))
+- Only `Created Date` and `Interaction Message Body` are strictly required; all other columns are optional
+- If optional columns are missing, a confirmation dialog lists which reports will have limited data
 - Ensure data is properly formatted (dates, text encoding)
 - Try opening CSV in Excel to verify structure
 
@@ -812,6 +899,10 @@ For licensing inquiries, contact Automattic Legal.
 - ✅ Historical analytics and trend detection
 - ✅ Anomaly detection and insights engine
 - ✅ Export/import database functionality
+- ✅ One-click Web UI launch from Desktop GUI
+- ✅ Auto-import to database for Web UI
+- ✅ CSV column mapping with fuzzy matching (Web UI & Desktop GUI)
+- ✅ Graceful handling of missing optional CSV columns
 
 **Planned:**
 - [ ] Real-time Zendesk integration (API sync)
