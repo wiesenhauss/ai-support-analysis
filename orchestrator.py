@@ -11,6 +11,7 @@ Pipeline Stages:
 1. support-data-precleanup.py - Initial data cleanup
 2. main-analysis-process.py - Core CSAT and sentiment analysis
 3. support-data-cleanup.py - Post-analysis data cleanup
+3b. ai-ces-analysis.py - AI CES quality scoring (6 dimensions)
 4. predict_csat.py - CSAT prediction and accuracy analysis
 5. topic-aggregator.py - Topic categorization and analysis
 6. csat-trends.py - CSAT trends and patterns analysis
@@ -212,7 +213,13 @@ def main():
     if not run_script("support-data-cleanup.py", [f"-file={output1}"]):
         sys.exit(1)
     
-    # Step 3: Run CSAT prediction
+    # Step 3b: Run AI CES quality analysis
+    print("📋 Step 3b: Running AI CES quality analysis...")
+    ces_input = find_latest_file(os.path.join(input_dir, "*-clean*.csv"))
+    if not run_script("ai-ces-analysis.py", [f"-file={ces_input}"]):
+        logging.warning("AI CES analysis failed, continuing with pipeline...")
+
+    # Step 4: Run CSAT prediction
     print("📋 Step 4: Running CSAT prediction analysis...")
     output2 = find_latest_file(os.path.join(input_dir, "*-clean*.csv"))
     if not run_script("predict_csat.py", [f"-file={output2}"]):

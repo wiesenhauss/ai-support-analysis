@@ -75,6 +75,7 @@ class SettingsManager:
                 "analysis_options": {
                     'main_analysis': True,
                     'data_cleanup': True,
+                    'ai_ces': False,
                     'predict_csat': True,
                     'topic_aggregator': True,
                     'csat_trends': True,
@@ -511,6 +512,7 @@ class AISupportAnalyzerGUI:
             'main_analysis': tk.BooleanVar(value=True),
             'data_cleanup': tk.BooleanVar(value=True),
             'auto_import': tk.BooleanVar(value=True),  # Auto-import to history after analysis
+            'ai_ces': tk.BooleanVar(value=False),
             'predict_csat': tk.BooleanVar(value=True),
             'topic_aggregator': tk.BooleanVar(value=True),
             'csat_trends': tk.BooleanVar(value=True),
@@ -750,6 +752,7 @@ class AISupportAnalyzerGUI:
         analysis_descriptions = {
             'main_analysis': 'Core Analysis',
             'data_cleanup': 'Data Cleanup & Validation',
+            'ai_ces': 'AI CES Quality Analysis',
             'predict_csat': 'CSAT Prediction Analysis',
             'topic_aggregator': 'Topic Categorization',
             'csat_trends': 'CSAT Trends Analysis',
@@ -1596,6 +1599,28 @@ class AISupportAnalyzerGUI:
                 if not current_file:
                     self.log_queue.put(('log', "❌ Could not find cleaned file"))
                     return False
+                step_counter += 1
+            
+            # Step: AI CES quality analysis (independent — only needs conversation column)
+            if self.analysis_options['ai_ces'].get():
+                self.log_queue.put(('log', f"📋 Step {step_counter}: Running AI CES quality analysis..."))
+                if self.cancel_requested:
+                    self.log_queue.put(('log', "⏹ Analysis cancelled by user"))
+                    return False
+                
+                ces_args = [f"-file={current_file}", f"--threads={concurrent_threads}"]
+                if self.column_mapping:
+                    ces_args.append(f"--column-mapping={json.dumps(self.column_mapping)}")
+                
+                if not self.run_python_script("ai-ces-analysis.py", ces_args):
+                    self.log_queue.put(('log', "⚠️  AI CES analysis failed, but continuing..."))
+                else:
+                    ces_output = self.find_latest_file("*ai-ces-analysis-output*.csv", search_dir=self.input_file_dir)
+                    if ces_output:
+                        current_file = ces_output
+                        self.log_queue.put(('log', f"   ✅ CES output: {os.path.basename(ces_output)}"))
+                
+                gc.collect()
                 step_counter += 1
             
             # Step: CSAT prediction (if needed)
