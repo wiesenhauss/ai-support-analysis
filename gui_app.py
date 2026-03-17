@@ -257,10 +257,14 @@ class SettingsManager:
         """Load custom ticket analyses configurations.
         
         Returns:
-            List of dicts with keys: name, prompt, result_type, description
+            List of dicts with keys: name, prompt, result_type, description, enabled
         """
         settings = self.load_settings()
-        return settings.get("custom_ticket_analyses", [])
+        analyses = settings.get("custom_ticket_analyses", [])
+        for analysis in analyses:
+            if 'enabled' not in analysis:
+                analysis['enabled'] = True
+        return analyses
     
     def add_custom_ticket_analysis(self, name: str, prompt: str, result_type: str, description: str = ""):
         """Add a single custom ticket analysis.
@@ -1387,10 +1391,16 @@ class AISupportAnalyzerGUI:
         # Validate custom per-ticket analysis configuration if selected
         if self.analysis_options['custom_ticket_analysis'].get():
             custom_ticket_analyses = self.settings_manager.load_custom_ticket_analyses()
+            enabled_analyses = [a for a in custom_ticket_analyses if a.get('enabled', True)]
             if not custom_ticket_analyses:
                 messagebox.showerror("Custom Per-Ticket Analysis Not Configured", 
                                    "Custom per-ticket analysis is selected but no analyses are configured.\n"
                                    "Please click 'Configure' to add at least one custom analysis.")
+                return
+            if not enabled_analyses:
+                messagebox.showerror("No Analyses Enabled", 
+                                   "Custom per-ticket analysis is selected but all configured analyses are disabled.\n"
+                                   "Please click 'Configure' and enable at least one analysis.")
                 return
         
         # Check if the user is trying to run dependent analyses without core analysis
@@ -1693,13 +1703,14 @@ class AISupportAnalyzerGUI:
             
             # Custom per-ticket analysis (if configured)
             if self.analysis_options['custom_ticket_analysis'].get():
-                custom_ticket_analyses = self.settings_manager.load_custom_ticket_analyses()
+                all_ticket_analyses = self.settings_manager.load_custom_ticket_analyses()
+                custom_ticket_analyses = [a for a in all_ticket_analyses if a.get('enabled', True)]
                 
                 if not custom_ticket_analyses:
-                    self.log_queue.put(('log', "⚠️  Custom per-ticket analysis skipped - no analyses configured"))
+                    self.log_queue.put(('log', "⚠️  Custom per-ticket analysis skipped - no enabled analyses configured"))
                 else:
                     self.log_queue.put(('log', f"📋 Step {step_counter}: Running custom per-ticket analysis..."))
-                    self.log_queue.put(('log', f"   📊 Processing {len(custom_ticket_analyses)} custom analyses per ticket"))
+                    self.log_queue.put(('log', f"   📊 Processing {len(custom_ticket_analyses)} of {len(all_ticket_analyses)} custom analyses per ticket (enabled only)"))
                     
                     if self.cancel_requested:
                         self.log_queue.put(('log', "⏹ Analysis cancelled by user"))
@@ -3727,25 +3738,59 @@ Here are the records to analyze:
         list_frame = ttk.LabelFrame(main_frame, text="Configured Analyses", padding="10")
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
-        # Scrollable listbox
+        # Scrollable frame with checkboxes for each analysis
         list_container = ttk.Frame(list_frame)
         list_container.pack(fill=tk.BOTH, expand=True)
         
-        scrollbar = ttk.Scrollbar(list_container)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas = tk.Canvas(list_container, height=200, borderwidth=1, relief='sunken')
+        scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
         
-        analysis_listbox = tk.Listbox(list_container, height=8, font=('Arial', 11),
-                                      yscrollcommand=scrollbar.set, selectmode=tk.SINGLE)
-        analysis_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=analysis_listbox.yview)
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
         
         # Store analyses in a mutable container for the dialog
         dialog_analyses = list(analyses)
+        selected_index = [None]
+        row_widgets = []
+        
+        SELECTED_BG = '#cce5ff'
+        DEFAULT_BG = ''
+        
+        def on_row_click(index):
+            """Select an analysis row for edit/delete operations."""
+            for _, lbl in row_widgets:
+                lbl.configure(background=DEFAULT_BG)
+            selected_index[0] = index
+            if index is not None and index < len(row_widgets):
+                _, lbl = row_widgets[index]
+                lbl.configure(background=SELECTED_BG)
         
         def refresh_listbox():
-            """Refresh the listbox with current analyses."""
-            analysis_listbox.delete(0, tk.END)
-            for analysis in dialog_analyses:
+            """Rebuild the analysis list with checkboxes."""
+            for widget in scrollable_frame.winfo_children():
+                widget.destroy()
+            row_widgets.clear()
+            selected_index[0] = None
+            
+            for i, analysis in enumerate(dialog_analyses):
+                row = ttk.Frame(scrollable_frame)
+                row.pack(fill=tk.X, pady=1, padx=2)
+                
+                enabled_var = tk.BooleanVar(value=analysis.get('enabled', True))
+                def on_toggle(idx=i, var=enabled_var):
+                    dialog_analyses[idx]['enabled'] = var.get()
+                cb = ttk.Checkbutton(row, variable=enabled_var, command=on_toggle)
+                cb.pack(side=tk.LEFT, padx=(0, 5))
+                
                 result_type = analysis.get('result_type', 'string')
                 name = analysis.get('name', 'Unnamed')
                 prompt = analysis.get('prompt', '')[:40]
@@ -3753,7 +3798,14 @@ Here are the records to analyze:
                 col_count = len(columns)
                 col_info = f"{col_count} cols" if col_count > 0 else "default"
                 display_text = f"{name} ({result_type}, {col_info}) - \"{prompt}...\""
-                analysis_listbox.insert(tk.END, display_text)
+                
+                lbl = tk.Label(row, text=display_text, font=('Arial', 11),
+                               anchor='w', cursor='hand2')
+                lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                lbl.bind('<Button-1>', lambda e, idx=i: on_row_click(idx))
+                lbl.bind('<Double-Button-1>', lambda e, idx=i: edit_analysis_dialog(idx))
+                
+                row_widgets.append((row, lbl))
         
         refresh_listbox()
         
@@ -3767,27 +3819,31 @@ Here are the records to analyze:
         
         def edit_analysis():
             """Edit the selected analysis."""
-            selection = analysis_listbox.curselection()
-            if not selection:
-                messagebox.showwarning("No Selection", "Please select an analysis to edit.")
+            if selected_index[0] is None:
+                messagebox.showwarning("No Selection", "Please click on an analysis to select it, then click Edit.")
                 return
-            
-            index = selection[0]
-            edit_analysis_dialog(index)
+            edit_analysis_dialog(selected_index[0])
         
         def delete_analysis():
             """Delete the selected analysis."""
-            selection = analysis_listbox.curselection()
-            if not selection:
-                messagebox.showwarning("No Selection", "Please select an analysis to delete.")
+            if selected_index[0] is None:
+                messagebox.showwarning("No Selection", "Please click on an analysis to select it, then click Delete.")
                 return
-            
-            index = selection[0]
+            index = selected_index[0]
             name = dialog_analyses[index].get('name', 'this analysis')
-            
             if messagebox.askyesno("Confirm Delete", f"Delete '{name}'?"):
                 del dialog_analyses[index]
                 refresh_listbox()
+        
+        def enable_all_analyses():
+            for a in dialog_analyses:
+                a['enabled'] = True
+            refresh_listbox()
+        
+        def disable_all_analyses():
+            for a in dialog_analyses:
+                a['enabled'] = False
+            refresh_listbox()
         
         def edit_analysis_dialog(index):
             """Show dialog to add or edit an analysis."""
@@ -3799,7 +3855,8 @@ Here are the records to analyze:
                     'prompt': '',
                     'result_type': 'boolean',
                     'description': '',
-                    'columns': []
+                    'columns': [],
+                    'enabled': True
                 }
             else:
                 current_data = dialog_analyses[index].copy()
@@ -4021,7 +4078,8 @@ Here are the records to analyze:
                     'prompt': prompt,
                     'result_type': result_type,
                     'description': description,
-                    'columns': selected_columns
+                    'columns': selected_columns,
+                    'enabled': current_data.get('enabled', True)
                 }
                 
                 if is_new:
@@ -4038,13 +4096,17 @@ Here are the records to analyze:
         # Add action buttons
         ttk.Button(action_frame, text="+ Add Analysis", command=add_analysis).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(action_frame, text="Edit", command=edit_analysis).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(action_frame, text="Delete", command=delete_analysis).pack(side=tk.LEFT)
+        ttk.Button(action_frame, text="Delete", command=delete_analysis).pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Separator(action_frame, orient='vertical').pack(side=tk.LEFT, fill='y', padx=(0, 10), pady=2)
+        ttk.Button(action_frame, text="Enable All", command=enable_all_analyses).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(action_frame, text="Disable All", command=disable_all_analyses).pack(side=tk.LEFT)
         
         # Info section
         info_frame = ttk.LabelFrame(main_frame, text="How It Works", padding="10")
         info_frame.pack(fill=tk.X, pady=(0, 15))
         
-        info_text = """• Each analysis runs on every ticket during processing
+        info_text = """• Use checkboxes to enable/disable which analyses run
+• Each enabled analysis runs on every ticket during processing
 • Boolean analyses return True/False values
 • String analyses return text responses
 • Results are saved as new columns: CUSTOM_<name>
@@ -4061,9 +4123,11 @@ Here are the records to analyze:
             """Save configurations and close the dialog."""
             if self.settings_manager.save_custom_ticket_analyses(dialog_analyses):
                 count = len(dialog_analyses)
+                enabled_count = sum(1 for a in dialog_analyses if a.get('enabled', True))
                 if count > 0:
                     messagebox.showinfo("Saved", 
-                                       f"Saved {count} custom per-ticket analysis configuration(s).")
+                                       f"Saved {count} custom per-ticket analysis configuration(s).\n"
+                                       f"{enabled_count} of {count} enabled.")
                 else:
                     messagebox.showinfo("Saved", "Custom per-ticket analyses cleared.")
                 config_window.destroy()

@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import api, { CustomTicketAnalysis } from '@/api/client'
 import LoadingSpinner from './LoadingSpinner'
 import Alert from './Alert'
-import { X, Plus, Pencil, Trash2, Save, CheckSquare, Square } from 'lucide-react'
+import { X, Plus, Pencil, Trash2, Save, CheckSquare, Square, ToggleLeft, ToggleRight } from 'lucide-react'
 
 interface CustomTicketAnalysisDialogProps {
   isOpen: boolean
@@ -41,6 +41,7 @@ const EXAMPLE_ANALYSES: CustomTicketAnalysis[] = [
     result_type: 'boolean',
     description: 'Identifies refund/cancellation requests',
     columns: ['Interaction Message Body', 'CSAT Comment'],
+    enabled: true,
   },
   {
     name: 'URGENCY_LEVEL',
@@ -48,6 +49,7 @@ const EXAMPLE_ANALYSES: CustomTicketAnalysis[] = [
     result_type: 'string',
     description: 'Classifies ticket urgency',
     columns: ['Interaction Message Body', 'CSAT Rating'],
+    enabled: true,
   },
   {
     name: 'NEEDS_ESCALATION',
@@ -55,6 +57,7 @@ const EXAMPLE_ANALYSES: CustomTicketAnalysis[] = [
     result_type: 'boolean',
     description: 'Identifies tickets needing escalation',
     columns: ['Interaction Message Body', 'SENTIMENT_ANALYSIS', 'MAIN_TOPIC'],
+    enabled: true,
   },
 ]
 
@@ -114,6 +117,7 @@ export default function CustomTicketAnalysisDialog({
       result_type: 'boolean',
       description: '',
       columns: [],
+      enabled: true,
     })
     setIsNewAnalysis(true)
   }
@@ -144,12 +148,26 @@ export default function CustomTicketAnalysisDialog({
     setSuccess('Changes saved locally. Click Save to apply.')
   }
 
+  const handleToggleEnabled = (name: string) => {
+    setAnalyses(prev => prev.map(a =>
+      a.name === name ? { ...a, enabled: !(a.enabled ?? true) } : a
+    ))
+  }
+
+  const handleEnableAll = () => {
+    setAnalyses(prev => prev.map(a => ({ ...a, enabled: true })))
+  }
+
+  const handleDisableAll = () => {
+    setAnalyses(prev => prev.map(a => ({ ...a, enabled: false })))
+  }
+
   const handleAddExample = (example: CustomTicketAnalysis) => {
     if (analyses.some(a => a.name === example.name)) {
       setError(`Analysis "${example.name}" already exists`)
       return
     }
-    setAnalyses(prev => [...prev, example])
+    setAnalyses(prev => [...prev, { ...example, enabled: true }])
     setSuccess(`Added example "${example.name}". Click Save to apply.`)
   }
 
@@ -202,48 +220,82 @@ export default function CustomTicketAnalysisDialog({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {analyses.map((analysis) => (
-                    <div
-                      key={analysis.name}
-                      className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-semibold text-primary-600">
-                            CUSTOM_{analysis.name}
-                          </span>
-                          <span className={cn(
-                            'text-xs px-2 py-0.5 rounded',
-                            analysis.result_type === 'boolean'
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'bg-purple-100 text-purple-700'
-                          )}>
-                            {analysis.result_type}
-                          </span>
-                        </div>
-                        {analysis.description && (
-                          <p className="text-sm text-gray-500 mt-1">{analysis.description}</p>
+                  <div className="flex justify-end gap-2 mb-1">
+                    <button onClick={handleEnableAll} className="text-xs text-primary-600 hover:underline">
+                      Enable All
+                    </button>
+                    <span className="text-gray-300">|</span>
+                    <button onClick={handleDisableAll} className="text-xs text-gray-500 hover:underline">
+                      Disable All
+                    </button>
+                  </div>
+                  {analyses.map((analysis) => {
+                    const isEnabled = analysis.enabled ?? true
+                    return (
+                      <div
+                        key={analysis.name}
+                        className={cn(
+                          'flex items-start gap-4 p-4 rounded-lg transition-colors',
+                          isEnabled ? 'bg-gray-50' : 'bg-gray-100 opacity-60'
                         )}
-                        <p className="text-xs text-gray-400 mt-2">
-                          {analysis.columns.length} columns selected
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
+                      >
                         <button
-                          onClick={() => handleEdit(analysis)}
-                          className="p-2 hover:bg-gray-200 rounded-lg text-gray-600"
+                          onClick={() => handleToggleEnabled(analysis.name)}
+                          className="mt-0.5 flex-shrink-0"
+                          title={isEnabled ? 'Click to disable' : 'Click to enable'}
                         >
-                          <Pencil className="w-4 h-4" />
+                          {isEnabled ? (
+                            <ToggleRight className="w-6 h-6 text-primary-600" />
+                          ) : (
+                            <ToggleLeft className="w-6 h-6 text-gray-400" />
+                          )}
                         </button>
-                        <button
-                          onClick={() => handleDelete(analysis.name)}
-                          className="p-2 hover:bg-danger-50 rounded-lg text-danger-600"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={cn(
+                              'font-mono text-sm font-semibold',
+                              isEnabled ? 'text-primary-600' : 'text-gray-400'
+                            )}>
+                              CUSTOM_{analysis.name}
+                            </span>
+                            <span className={cn(
+                              'text-xs px-2 py-0.5 rounded',
+                              analysis.result_type === 'boolean'
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'bg-purple-100 text-purple-700'
+                            )}>
+                              {analysis.result_type}
+                            </span>
+                            {!isEnabled && (
+                              <span className="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-500">
+                                disabled
+                              </span>
+                            )}
+                          </div>
+                          {analysis.description && (
+                            <p className="text-sm text-gray-500 mt-1">{analysis.description}</p>
+                          )}
+                          <p className="text-xs text-gray-400 mt-2">
+                            {analysis.columns.length} columns selected
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleEdit(analysis)}
+                            className="p-2 hover:bg-gray-200 rounded-lg text-gray-600"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(analysis.name)}
+                            className="p-2 hover:bg-danger-50 rounded-lg text-danger-600"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
 
@@ -283,7 +335,7 @@ export default function CustomTicketAnalysisDialog({
         {/* Footer */}
         <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50">
           <p className="text-sm text-gray-500">
-            {analyses.length} {analyses.length === 1 ? 'analysis' : 'analyses'} configured
+            {analyses.filter(a => a.enabled ?? true).length} of {analyses.length} {analyses.length === 1 ? 'analysis' : 'analyses'} enabled
           </p>
           <div className="flex gap-3">
             <button onClick={onClose} className="btn btn-secondary">

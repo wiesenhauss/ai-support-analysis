@@ -48,6 +48,7 @@ class CustomTicketAnalysis(BaseModel):
     result_type: str = Field(default="boolean", description="'boolean' or 'string'")
     description: str = Field(default="", description="Optional description for UI display")
     columns: List[str] = Field(default_factory=list, description="CSV columns to include in AI context")
+    enabled: bool = Field(default=True, description="Whether this analysis is enabled for execution")
 
 
 class CustomTicketAnalysesRequest(BaseModel):
