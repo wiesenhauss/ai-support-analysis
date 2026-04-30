@@ -67,6 +67,7 @@ from utils import (
     normalize_file_path,
     find_column_by_substring,
     get_openai_client,
+    resolve_model_name,
 )
 
 try:
@@ -464,7 +465,7 @@ class RateLimiter:
                 
             self.last_request_time = time.time()
 
-def process_single_ticket(task: TicketTask, api_key: str, use_local: bool, rate_limiter: RateLimiter, df_attrs: dict = None) -> ProcessingResult:
+def process_single_ticket(task: TicketTask, api_key: str, use_local: bool, rate_limiter: RateLimiter, df_attrs: dict = None, local_url: Optional[str] = None) -> ProcessingResult:
     """Process a single ticket with error handling and rate limiting"""
     try:
         # Get the row data - task.row is now a dict
@@ -499,7 +500,7 @@ def process_single_ticket(task: TicketTask, api_key: str, use_local: bool, rate_
         
         # Create prompt and get response
         prompt = create_analysis_prompt(row, df_attrs)
-        report = get_openai_response(prompt, api_key, use_local=use_local)
+        report = get_openai_response(prompt, api_key, use_local=use_local, local_url=local_url)
         
         if report:
             return ProcessingResult(index=task.index, success=True, report=report)
@@ -519,20 +520,21 @@ def process_single_ticket(task: TicketTask, api_key: str, use_local: bool, rate_
             error=str(e)
         )
 
-def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_local: bool = False) -> Optional[dict]:
+def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_local: bool = False, local_url: Optional[str] = None) -> Optional[dict]:
 	"""Get structured JSON response from OpenAI API with retry logic.
-	
+
 	Uses OpenAI's Structured Outputs feature to guarantee response format compliance.
 	This eliminates parsing errors and ensures type-safe responses.
 	"""
 	# Use shared OpenAI client for connection reuse
-	client = get_openai_client(api_key=api_key, use_local=use_local)
-	
+	client = get_openai_client(api_key=api_key, use_local=use_local, local_url=local_url)
+	model_name = resolve_model_name(client, "gpt-4.1-mini", use_local)
+
 	for attempt in range(max_retries):
 		try:
 			# Use structured outputs for guaranteed JSON schema compliance
 			response = client.chat.completions.create(
-				model="gpt-4.1-mini",
+				model=model_name,
 				messages=[
 					{"role": "system", "content": "You are a customer support supervisor analyzing support interactions. Provide detailed, accurate analysis based on the interaction content."},
 					{"role": "user", "content": prompt}
@@ -615,7 +617,7 @@ def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_loc
 
 	return None
 
-def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int = 25, use_local: bool = False, max_workers: int = 5, column_mapping: dict = None) -> None:
+def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int = 25, use_local: bool = False, max_workers: int = 5, column_mapping: dict = None, local_url: Optional[str] = None) -> None:
 	"""Process the CSV file using concurrent threads for improved performance."""
 	try:
 		# Read CSV (input file)
@@ -731,7 +733,7 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 		with ThreadPoolExecutor(max_workers=max_workers) as executor:
 			# Submit all tasks - row data is now copied in the task itself
 			future_to_task = {
-				executor.submit(process_single_ticket, task, api_key, use_local, rate_limiter, df_attrs): task 
+				executor.submit(process_single_ticket, task, api_key, use_local, rate_limiter, df_attrs, local_url): task
 				for task in tasks
 			}
 			
@@ -788,6 +790,7 @@ def main():
 	parser = argparse.ArgumentParser(description='Process CSAT survey data and support ticket interactions.')
 	parser.add_argument('-file', '--input-file', type=str, help='Path to the input CSV file')
 	parser.add_argument('--local', action='store_true', help='Use local AI server instead of OpenAI API')
+	parser.add_argument('--local-url', type=str, default=None, help='Override local AI server URL (default: http://127.0.0.1:1234). Only used with --local.')
 	parser.add_argument('--threads', type=int, default=50, help='Number of concurrent processing threads (default: 50)')
 	parser.add_argument('--column-mapping', type=str, default=None, help='JSON mapping of CSV column names to expected names (e.g. \'{"my_col": "Expected Col"}\')')
 	args = parser.parse_args()
@@ -822,7 +825,8 @@ def main():
 	
 	# Print which AI service is being used
 	if args.local:
-		print(f"Using local AI server at http://localhost:1234/v1 with {MAX_WORKERS} threads")
+		local_url_display = args.local_url or "http://127.0.0.1:1234"
+		print(f"Using local AI server at {local_url_display} with {MAX_WORKERS} threads")
 	else:
 		print(f"Using OpenAI API with {MAX_WORKERS} concurrent threads")
 	
@@ -835,7 +839,7 @@ def main():
 		except json.JSONDecodeError as e:
 			raise ValueError(f"Invalid --column-mapping JSON: {e}")
 	
-	process_csv(INPUT_FILE, OUTPUT_FILE, API_KEY, BATCH_SIZE, use_local=args.local, max_workers=MAX_WORKERS, column_mapping=col_mapping)
+	process_csv(INPUT_FILE, OUTPUT_FILE, API_KEY, BATCH_SIZE, use_local=args.local, max_workers=MAX_WORKERS, column_mapping=col_mapping, local_url=args.local_url)
 	
 if __name__ == "__main__":
 	main()

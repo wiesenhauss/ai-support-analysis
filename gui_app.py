@@ -98,7 +98,9 @@ class SettingsManager:
                 "max_retries": 3,
                 "batch_size": 100,
                 "concurrent_threads": 50,
-                "temp_directory": ""
+                "temp_directory": "",
+                "use_local_ai": False,
+                "local_ai_url": "http://127.0.0.1:1234"
             }
         }
     
@@ -496,16 +498,31 @@ class AISupportAnalyzerGUI:
         
         # Initialize settings manager
         self.settings_manager = SettingsManager()
-        
+
         # Initialize web server manager (will set log_callback after log_message method is available)
         self.web_server_manager = WebServerManager()
-        
+
+        # Load advanced settings up-front for UI variables that mirror persisted state
+        _initial_advanced = self.settings_manager.load_settings().get("advanced_settings", {})
+
         # Variables
         self.api_key_var = tk.StringVar()
         self.input_file_var = tk.StringVar()
         self.limit_var = tk.StringVar(value="No limit")
         self.progress_var = tk.DoubleVar()
         self.status_var = tk.StringVar(value="Ready")
+
+        # Local AI (LM Studio) — toggle lives in main window, URL lives in Advanced Settings
+        self.use_local_ai_var = tk.BooleanVar(value=_initial_advanced.get("use_local_ai", False))
+        self.local_ai_url_display_var = tk.StringVar(
+            value=f"→ {_initial_advanced.get('local_ai_url', 'http://127.0.0.1:1234')}"
+        )
+
+        # Concurrent threads — exposed in the main window so users can dial down for local AI.
+        # Default differs by mode: cloud=50, local=1 (LM Studio with 100 threads will choke).
+        self.concurrent_threads_var = tk.StringVar(
+            value=str(_initial_advanced.get("concurrent_threads", 50))
+        )
         
         # Analysis options
         self.analysis_options = {
@@ -857,19 +874,55 @@ class AISupportAnalyzerGUI:
         limit_inner.pack(fill=tk.X)
         
         ttk.Label(limit_inner, text="Record Limit:").pack(side=tk.LEFT)
-        
-        self.limit_combo = ttk.Combobox(limit_inner, textvariable=self.limit_var, 
+
+        self.limit_combo = ttk.Combobox(limit_inner, textvariable=self.limit_var,
                                        values=["No limit", "1000", "5000", "10000", "25000", "50000", "Custom..."],
                                        state="readonly", width=15)
         self.limit_combo.pack(side=tk.LEFT, padx=(10, 10))
         self.limit_combo.bind('<<ComboboxSelected>>', self.on_limit_change)
-        
+
         self.custom_limit_entry = ttk.Entry(limit_inner, width=10)
-        
-        info_label = ttk.Label(limit_frame, text="💡 Limit records for faster processing (useful for testing)", 
+
+        ttk.Label(limit_inner, text="Threads:").pack(side=tk.LEFT, padx=(20, 0))
+        self.threads_spinbox = ttk.Spinbox(
+            limit_inner,
+            from_=1,
+            to=100,
+            textvariable=self.concurrent_threads_var,
+            width=5,
+            command=self._on_threads_change,
+        )
+        self.threads_spinbox.pack(side=tk.LEFT, padx=(10, 0))
+        self.concurrent_threads_var.trace_add('write', lambda *_: self._on_threads_change())
+
+        info_label = ttk.Label(limit_frame, text="💡 Limit records for faster processing (useful for testing). For local AI, 1 thread is recommended.",
                               font=('Arial', 9))
         info_label.pack(pady=(5, 0))
-        
+
+        # Local AI (LM Studio) toggle — visible alongside record-limit row
+        ttk.Separator(limit_frame, orient='horizontal').pack(fill=tk.X, pady=(8, 6))
+        local_ai_row = ttk.Frame(limit_frame)
+        local_ai_row.pack(fill=tk.X)
+        ttk.Checkbutton(
+            local_ai_row,
+            text="🖥️ Use local AI server (LM Studio)",
+            variable=self.use_local_ai_var,
+            command=self._on_local_ai_toggle,
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            local_ai_row,
+            textvariable=self.local_ai_url_display_var,
+            foreground="#666",
+            font=('Arial', 9),
+        ).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(
+            limit_frame,
+            text="💡 Routes the main per-ticket analyses (Main / AI CES / Custom Ticket) to a local OpenAI-compatible server. Configure URL in Advanced Settings.",
+            font=('Arial', 9),
+            wraplength=900,
+            justify=tk.LEFT,
+        ).pack(pady=(5, 0), anchor=tk.W)
+
         # Control Buttons
         control_frame = ttk.Frame(main_frame)
         control_frame.pack(pady=20)
@@ -1507,10 +1560,23 @@ class AISupportAnalyzerGUI:
             current_file = input_file
             step_counter = 1
             
-            # Load advanced settings for concurrent threads
+            # Load advanced settings for concurrent threads + local-AI config
             settings = self.settings_manager.load_settings()
             advanced = settings.get("advanced_settings", {})
-            concurrent_threads = advanced.get("concurrent_threads", 50)
+
+            # Main-window spinbox is the source of truth; fall back to persisted value if unparseable.
+            try:
+                concurrent_threads = int(self.concurrent_threads_var.get())
+                concurrent_threads = max(1, min(100, concurrent_threads))
+            except (ValueError, AttributeError):
+                concurrent_threads = advanced.get("concurrent_threads", 50)
+
+            # Local AI propagation: build flag list once and append to in-scope scripts.
+            use_local_ai = bool(self.use_local_ai_var.get())
+            local_ai_url = advanced.get("local_ai_url", "http://127.0.0.1:1234")
+            local_ai_args = [f"--local", f"--local-url={local_ai_url}"] if use_local_ai else []
+            if use_local_ai:
+                self.log_queue.put(('log', f"🖥️  Using local AI server at {local_ai_url}"))
             
             # Check what type of input file we have and what we need to run
             need_core_analysis = self.analysis_options['main_analysis'].get()
@@ -1564,6 +1630,7 @@ class AISupportAnalyzerGUI:
                 analysis_args = [f"-file={current_file}", f"--threads={concurrent_threads}"]
                 if self.column_mapping:
                     analysis_args.append(f"--column-mapping={json.dumps(self.column_mapping)}")
+                analysis_args.extend(local_ai_args)
                 if not self.run_python_script("main-analysis-process.py", analysis_args):
                     return False
                 
@@ -1611,7 +1678,8 @@ class AISupportAnalyzerGUI:
                 ces_args = [f"-file={current_file}", f"--threads={concurrent_threads}"]
                 if self.column_mapping:
                     ces_args.append(f"--column-mapping={json.dumps(self.column_mapping)}")
-                
+                ces_args.extend(local_ai_args)
+
                 if not self.run_python_script("ai-ces-analysis.py", ces_args):
                     self.log_queue.put(('log', "⚠️  AI CES analysis failed, but continuing..."))
                 else:
@@ -1755,7 +1823,8 @@ class AISupportAnalyzerGUI:
                             f"-file={current_file}",
                             f"-config={config_path}"
                         ]
-                        
+                        custom_ticket_args.extend(local_ai_args)
+
                         if not self.run_python_script("custom_ticket_analysis.py", custom_ticket_args):
                             self.log_queue.put(('log', "⚠️  Custom per-ticket analysis failed, but continuing..."))
                         else:
@@ -2650,16 +2719,58 @@ https://platform.openai.com/api-keys"""
         # Close button
         ttk.Button(main_frame, text="Close", command=dialog.destroy).pack(pady=(10, 0))
     
+    def _on_local_ai_toggle(self):
+        """Persist the main-window 'Use local AI' toggle and swap the default
+        thread count: local servers (LM Studio) choke on 50+ parallel requests,
+        so default to 1 thread when enabling local AI and back to 50 when off."""
+        is_local = bool(self.use_local_ai_var.get())
+        self.settings_manager.save_settings({
+            "advanced_settings": {"use_local_ai": is_local}
+        })
+
+        # Suggest a sensible thread count for the chosen mode, but don't override
+        # if the user already moved it away from the prior mode's default.
+        try:
+            current = int(self.concurrent_threads_var.get())
+        except ValueError:
+            current = None
+        if is_local and current in (None, 50):
+            self.concurrent_threads_var.set("1")
+        elif not is_local and current in (None, 1):
+            self.concurrent_threads_var.set("50")
+
+    def _on_threads_change(self):
+        """Persist the main-window thread count, clamped to [1, 100]."""
+        raw = self.concurrent_threads_var.get().strip()
+        if not raw:
+            return
+        try:
+            value = int(raw)
+        except ValueError:
+            return
+        if value < 1 or value > 100:
+            return
+        self.settings_manager.save_settings({
+            "advanced_settings": {"concurrent_threads": value}
+        })
+
+    def _refresh_local_ai_url_display(self):
+        """Update the small URL hint shown next to the main-window toggle."""
+        url = self.settings_manager.load_settings().get(
+            "advanced_settings", {}
+        ).get("local_ai_url", "http://127.0.0.1:1234")
+        self.local_ai_url_display_var.set(f"→ {url}")
+
     def show_advanced_settings(self):
         """Show advanced settings dialog."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Advanced Settings")
-        dialog.geometry("600x400")
+        dialog.geometry("600x560")
         dialog.transient(self.root)
         dialog.grab_set()
-        
+
         # Position the dialog safely within view
-        self._position_dialog_relative_to_parent(dialog, width=600, height=400)
+        self._position_dialog_relative_to_parent(dialog, width=600, height=560)
         
         main_frame = ttk.Frame(dialog, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -2703,7 +2814,25 @@ https://platform.openai.com/api-keys"""
         ttk.Label(threads_frame, text="Concurrent Threads:").pack(side=tk.LEFT)
         threads_var = tk.StringVar(value=str(advanced.get("concurrent_threads", 50)))
         ttk.Entry(threads_frame, textvariable=threads_var, width=10).pack(side=tk.RIGHT)
-        
+
+        # Local AI (LM Studio) — URL only; the enable/disable toggle lives in the main window.
+        local_ai_frame = ttk.LabelFrame(main_frame, text="Local AI (LM Studio)", padding="15")
+        local_ai_frame.pack(fill=tk.X, pady=(0, 15))
+
+        url_row = ttk.Frame(local_ai_frame)
+        url_row.pack(fill=tk.X, pady=5)
+        ttk.Label(url_row, text="Server URL:").pack(side=tk.LEFT)
+        local_ai_url_var = tk.StringVar(
+            value=advanced.get("local_ai_url", "http://127.0.0.1:1234")
+        )
+        ttk.Entry(url_row, textvariable=local_ai_url_var, width=30).pack(side=tk.RIGHT)
+        ttk.Label(
+            local_ai_frame,
+            text="The LM Studio default is http://127.0.0.1:1234. /v1 is appended automatically.",
+            font=('Arial', 9),
+            foreground="#666",
+        ).pack(anchor=tk.W, pady=(4, 0))
+
         # Save function
         def save_advanced_settings():
             try:
@@ -2712,17 +2841,23 @@ https://platform.openai.com/api-keys"""
                 if threads_value < 1 or threads_value > 100:
                     messagebox.showerror("Error", "Concurrent Threads must be between 1 and 100")
                     return
-                
+
+                local_url = local_ai_url_var.get().strip() or "http://127.0.0.1:1234"
+
                 new_settings = {
                     "advanced_settings": {
                         "api_timeout": int(timeout_var.get()),
                         "max_retries": int(retries_var.get()),
                         "batch_size": int(batch_var.get()),
-                        "concurrent_threads": threads_value
+                        "concurrent_threads": threads_value,
+                        "local_ai_url": local_url
                     }
                 }
-                
+
                 if self.settings_manager.save_settings(new_settings):
+                    self._refresh_local_ai_url_display()
+                    # Keep main-window spinbox in sync with what was just saved.
+                    self.concurrent_threads_var.set(str(threads_value))
                     messagebox.showinfo("Success", "Advanced settings saved!")
                     dialog.destroy()
                 else:

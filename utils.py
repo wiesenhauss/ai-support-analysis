@@ -350,38 +350,96 @@ class OpenAIClientManager:
 _client_manager = OpenAIClientManager()
 
 
-def get_openai_client(api_key: Optional[str] = None, 
+DEFAULT_LOCAL_AI_URL = "http://127.0.0.1:1234"
+
+
+def _normalize_local_ai_url(url: str) -> str:
+    """Ensure a local-AI base URL ends with /v1 (OpenAI-compatible path)."""
+    url = url.strip().rstrip("/")
+    if not url:
+        url = DEFAULT_LOCAL_AI_URL
+    if not url.endswith("/v1"):
+        url = f"{url}/v1"
+    return url
+
+
+def get_openai_client(api_key: Optional[str] = None,
                       base_url: Optional[str] = None,
-                      use_local: bool = False) -> 'openai.OpenAI':
+                      use_local: bool = False,
+                      local_url: Optional[str] = None) -> 'openai.OpenAI':
     """
     Get the shared OpenAI client instance.
-    
+
     This is the recommended way to get an OpenAI client, as it reuses
     connections and reduces overhead.
-    
+
     Args:
         api_key: OpenAI API key (default: from environment)
         base_url: Custom base URL (default: None)
-        use_local: If True, use local server at localhost:1234
-        
+        use_local: If True, point at a local OpenAI-compatible server (LM Studio).
+        local_url: Override the local server URL (default: http://127.0.0.1:1234).
+            Trailing /v1 is appended automatically if missing.
+
     Returns:
         OpenAI client instance
-        
+
     Examples:
         >>> client = get_openai_client()
         >>> response = client.chat.completions.create(model="gpt-4.1-mini", ...)
-        
+
         >>> local_client = get_openai_client(use_local=True)
+        >>> custom_local = get_openai_client(use_local=True, local_url="http://192.168.1.10:1234")
     """
     if use_local:
-        base_url = "http://localhost:1234/v1"
-    
+        base_url = _normalize_local_ai_url(local_url or DEFAULT_LOCAL_AI_URL)
+
     return _client_manager.get_client(api_key=api_key, base_url=base_url)
 
 
 def reset_openai_client():
     """Reset the OpenAI client (useful when API key changes)."""
     _client_manager.reset()
+
+
+_local_model_cache: dict = {}
+
+
+def resolve_model_name(client, requested_model: str, use_local: bool) -> str:
+    """Return a model name the configured server will actually accept.
+
+    For OpenAI (cloud), pass `requested_model` through unchanged. For a local
+    OpenAI-compatible server (LM Studio), `requested_model` (e.g. 'gpt-4.1-mini')
+    is unlikely to match a downloaded model — LM Studio rejects unknown ids
+    rather than falling back to the loaded model. We query `/v1/models` once
+    per client and substitute the first available id.
+
+    Args:
+        client: an `openai.OpenAI` instance (already pointed at the right base URL)
+        requested_model: the model name the script wants to use
+        use_local: whether the client is talking to a local server
+
+    Returns:
+        A model id known to the target server. Falls back to `requested_model`
+        if the local server returns an empty model list (lets the original
+        error surface to the caller).
+    """
+    if not use_local:
+        return requested_model
+
+    cache_key = getattr(client, "base_url", None)
+    if cache_key in _local_model_cache:
+        return _local_model_cache[cache_key]
+
+    try:
+        models = client.models.list()
+        first = next(iter(models.data), None)
+        if first and getattr(first, "id", None):
+            _local_model_cache[cache_key] = first.id
+            return first.id
+    except Exception:
+        pass
+
+    return requested_model
 
 
 def _parse_context_length_error(error_message: str) -> tuple:

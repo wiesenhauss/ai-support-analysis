@@ -591,10 +591,39 @@ export OPENAI_API_KEY="sk-proj-your-key-here"
     "api_timeout": 60,
     "max_retries": 3,
     "batch_size": 100,
-    "concurrent_threads": 50
+    "concurrent_threads": 50,
+    "use_local_ai": false,
+    "local_ai_url": "http://127.0.0.1:1234"
   }
 }
 ```
+
+### Local AI (LM Studio)
+
+The three per-ticket analyses — **Main Analysis**, **AI CES**, and **Custom Per-Ticket Analysis** — can run against a local OpenAI-compatible server (e.g. [LM Studio](https://lmstudio.ai/)) instead of the OpenAI API. The trend/report analyses still require OpenAI.
+
+**Prerequisites:**
+1. Install LM Studio and load any chat-completions-capable model.
+2. Click **Start Server** in LM Studio (default endpoint: `http://127.0.0.1:1234`).
+3. No `OPENAI_API_KEY` is required when using `--local`.
+
+**Desktop GUI:**
+- Tick **🖥️ Use local AI server (LM Studio)** in the *Processing Options* section of the main window.
+- The configured URL is shown next to the toggle.
+- Change the URL via *Settings → Advanced Settings → Local AI (LM Studio)* (the trailing `/v1` is appended automatically).
+
+**Command Line:**
+```bash
+# Default URL (http://127.0.0.1:1234)
+python main-analysis-process.py -file=tickets.csv --local --threads=10
+python ai-ces-analysis.py        -file=tickets.csv --local --threads=10
+python custom_ticket_analysis.py -file=tickets.csv -config=config.json --local
+
+# Custom URL (e.g. LM Studio on a non-default port or remote host)
+python main-analysis-process.py -file=tickets.csv --local --local-url=http://192.168.1.20:1234
+```
+
+> Model names (`gpt-4.1`, `gpt-4.1-mini`) are sent through unchanged. LM Studio routes requests to whichever model is currently loaded.
 
 ### Database Location
 

@@ -54,6 +54,7 @@ from utils import (
     normalize_file_path,
     find_column_by_substring,
     get_openai_client,
+    resolve_model_name,
 )
 
 try:
@@ -319,14 +320,15 @@ def create_ces_prompt(row: dict, conversation_col: str) -> str:
 # OpenAI call
 # ---------------------------------------------------------------------------
 
-def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_local: bool = False) -> Optional[dict]:
+def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_local: bool = False, local_url: Optional[str] = None) -> Optional[dict]:
     """Get structured JSON response from the API with retry logic."""
-    client = get_openai_client(api_key=api_key, use_local=use_local)
+    client = get_openai_client(api_key=api_key, use_local=use_local, local_url=local_url)
+    model_name = resolve_model_name(client, "gpt-4.1-mini", use_local)
 
     for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model=model_name,
                 messages=[
                     {
                         "role": "system",
@@ -414,6 +416,7 @@ def process_single_ticket(
     use_local: bool,
     rate_limiter: RateLimiter,
     conversation_col: str,
+    local_url: Optional[str] = None,
 ) -> ProcessingResult:
     try:
         row = task.row
@@ -429,7 +432,7 @@ def process_single_ticket(
         rate_limiter.wait_if_needed()
 
         prompt = create_ces_prompt(row, conversation_col)
-        report = get_openai_response(prompt, api_key, use_local=use_local)
+        report = get_openai_response(prompt, api_key, use_local=use_local, local_url=local_url)
 
         if report:
             return ProcessingResult(index=task.index, success=True, report=report)
@@ -457,6 +460,7 @@ def process_csv(
     use_local: bool = False,
     max_workers: int = 50,
     column_mapping: dict = None,
+    local_url: Optional[str] = None,
 ) -> None:
     """Process the CSV with concurrent threads."""
     try:
@@ -531,6 +535,7 @@ def process_csv(
                     use_local,
                     rate_limiter,
                     conversation_col,
+                    local_url,
                 ): task
                 for task in tasks
             }
@@ -583,6 +588,7 @@ def main():
     )
     parser.add_argument("-file", "--input-file", type=str, help="Path to the input CSV file")
     parser.add_argument("--local", action="store_true", help="Use local AI server instead of OpenAI API")
+    parser.add_argument("--local-url", type=str, default=None, help="Override local AI server URL (default: http://127.0.0.1:1234). Only used with --local.")
     parser.add_argument("--threads", type=int, default=50, help="Number of concurrent processing threads (default: 50)")
     parser.add_argument(
         "--column-mapping",
@@ -612,7 +618,8 @@ def main():
     MAX_WORKERS = args.threads
 
     if args.local:
-        print(f"Using local AI server at http://localhost:1234/v1 with {MAX_WORKERS} threads")
+        local_url_display = args.local_url or "http://127.0.0.1:1234"
+        print(f"Using local AI server at {local_url_display} with {MAX_WORKERS} threads")
     else:
         print(f"Using OpenAI API with {MAX_WORKERS} concurrent threads")
 
@@ -624,7 +631,7 @@ def main():
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid --column-mapping JSON: {e}")
 
-    process_csv(INPUT_FILE, OUTPUT_FILE, API_KEY, use_local=args.local, max_workers=MAX_WORKERS, column_mapping=col_mapping)
+    process_csv(INPUT_FILE, OUTPUT_FILE, API_KEY, use_local=args.local, max_workers=MAX_WORKERS, column_mapping=col_mapping, local_url=args.local_url)
 
 
 if __name__ == "__main__":

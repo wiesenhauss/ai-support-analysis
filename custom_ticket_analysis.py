@@ -71,6 +71,7 @@ from utils import (
     normalize_file_path,
     find_column_by_substring,
     get_openai_client,
+    resolve_model_name,
 )
 
 try:
@@ -300,19 +301,21 @@ Analyze the ticket and provide your response."""
 
 
 def get_custom_analysis_response(
-    prompt: str, 
+    prompt: str,
     analysis: CustomAnalysisConfig,
-    api_key: str, 
+    api_key: str,
     max_retries: int = 3,
-    use_local: bool = False
+    use_local: bool = False,
+    local_url: Optional[str] = None
 ) -> Optional[Any]:
     """Get structured response from OpenAI API for a custom analysis."""
-    client = get_openai_client(api_key=api_key, use_local=use_local)
-    
+    client = get_openai_client(api_key=api_key, use_local=use_local, local_url=local_url)
+    model_name = resolve_model_name(client, "gpt-4.1-mini", use_local)
+
     for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model=model_name,
                 messages=[
                     {
                         "role": "system", 
@@ -371,11 +374,12 @@ def get_custom_analysis_response(
 
 
 def process_single_ticket(
-    task: TicketTask, 
-    api_key: str, 
-    use_local: bool, 
+    task: TicketTask,
+    api_key: str,
+    use_local: bool,
     rate_limiter: RateLimiter,
-    df_attrs: dict = None
+    df_attrs: dict = None,
+    local_url: Optional[str] = None
 ) -> ProcessingResult:
     """Process a single ticket with all custom analyses."""
     try:
@@ -387,7 +391,7 @@ def process_single_ticket(
             
             # Create prompt and get response
             prompt = create_custom_prompt(task.row, analysis, df_attrs)
-            result = get_custom_analysis_response(prompt, analysis, api_key, use_local=use_local)
+            result = get_custom_analysis_response(prompt, analysis, api_key, use_local=use_local, local_url=local_url)
             
             if result is not None:
                 results[analysis.column_name] = result
@@ -410,12 +414,13 @@ def process_single_ticket(
 
 
 def process_csv(
-    input_file: str, 
-    output_file: str, 
+    input_file: str,
+    output_file: str,
     analyses: List[CustomAnalysisConfig],
-    api_key: str, 
-    use_local: bool = False, 
-    max_workers: int = 25
+    api_key: str,
+    use_local: bool = False,
+    max_workers: int = 25,
+    local_url: Optional[str] = None
 ) -> None:
     """Process the CSV file with custom analyses using concurrent threads."""
     try:
@@ -502,8 +507,8 @@ def process_csv(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_task = {
                 executor.submit(
-                    process_single_ticket, task, api_key, use_local, rate_limiter, df_attrs
-                ): task 
+                    process_single_ticket, task, api_key, use_local, rate_limiter, df_attrs, local_url
+                ): task
                 for task in tasks
             }
             
@@ -586,6 +591,7 @@ def main():
     parser.add_argument('-file', '--input-file', type=str, help='Path to the input CSV file')
     parser.add_argument('-config', '--config-file', type=str, help='Path to JSON config file')
     parser.add_argument('--local', action='store_true', help='Use local AI server instead of OpenAI API')
+    parser.add_argument('--local-url', type=str, default=None, help='Override local AI server URL (default: http://127.0.0.1:1234). Only used with --local.')
     parser.add_argument('--threads', type=int, default=25, help='Number of concurrent processing threads (default: 25)')
     args = parser.parse_args()
     
@@ -632,12 +638,13 @@ def main():
     
     # Print which AI service is being used
     if args.local:
-        print(f"\nUsing local AI server at http://localhost:1234/v1 with {args.threads} threads")
+        local_url_display = args.local_url or "http://127.0.0.1:1234"
+        print(f"\nUsing local AI server at {local_url_display} with {args.threads} threads")
     else:
         print(f"\nUsing OpenAI API with {args.threads} concurrent threads")
-    
+
     # Run processing
-    process_csv(INPUT_FILE, OUTPUT_FILE, analyses, API_KEY, use_local=args.local, max_workers=args.threads)
+    process_csv(INPUT_FILE, OUTPUT_FILE, analyses, API_KEY, use_local=args.local, max_workers=args.threads, local_url=args.local_url)
 
 
 if __name__ == "__main__":
