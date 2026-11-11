@@ -21,3 +21,4 @@ web_settings.json
 # Logs and temporary files
 orchestrator.log
 *.log
+.venv/

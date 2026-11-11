@@ -73,8 +73,24 @@ try:
     from tqdm import tqdm
 except ImportError:
     # Fallback if tqdm is not available
-    def tqdm(iterable, *args, **kwargs):
-        return iterable
+    class tqdm:
+        """No-op stand-in for tqdm; supports both tqdm(iterable) and tqdm(total=N) usage."""
+        def __init__(self, iterable=None, *args, **kwargs):
+            self.iterable = iterable if iterable is not None else []
+        def __iter__(self):
+            return iter(self.iterable)
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+        def update(self, n=1):
+            pass
+        def set_postfix(self, *args, **kwargs):
+            pass
+        def set_description(self, *args, **kwargs):
+            pass
+        def close(self):
+            pass
 
 # JSON Schema for Structured Outputs - ensures reliable, type-safe API responses
 ANALYSIS_RESPONSE_SCHEMA = {
@@ -617,6 +633,7 @@ def get_openai_response(prompt: str, api_key: str, max_retries: int = 3, use_loc
 
 def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int = 25, use_local: bool = False, max_workers: int = 5, column_mapping: dict = None) -> None:
 	"""Process the CSV file using concurrent threads for improved performance."""
+	df = None
 	try:
 		# Read CSV (input file)
 		df = read_csv_file(input_file, column_mapping=column_mapping)
@@ -773,8 +790,9 @@ def process_csv(input_file: str, output_file: str, api_key: str, batch_size: int
 		
 	except Exception as e:
 		print(f"❌ Error in concurrent processing: {str(e)}")
-		# Save progress even if there's an error
-		df.to_csv(output_file, index=False)
+		# Save progress even if there's an error (df is None if reading the CSV failed)
+		if df is not None:
+			df.to_csv(output_file, index=False)
 		raise
 
 def main():

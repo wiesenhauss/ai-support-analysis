@@ -799,7 +799,7 @@ class AISupportAnalyzerGUI:
                 self.config_button.pack(side=tk.LEFT, padx=(10, 0))
                 
                 # Bind checkbox to enable/disable configure button
-                self.analysis_options[key].trace('w', self.on_custom_analysis_toggle)
+                self.analysis_options[key].trace_add('write', self.on_custom_analysis_toggle)
             elif key == 'custom_ticket_analysis':
                 # Special handling for custom per-ticket analysis
                 custom_ticket_frame = ttk.Frame(parent)
@@ -817,7 +817,7 @@ class AISupportAnalyzerGUI:
                 self.custom_ticket_config_button.pack(side=tk.LEFT, padx=(10, 0))
                 
                 # Bind checkbox to enable/disable configure button
-                self.analysis_options[key].trace('w', self.on_custom_ticket_analysis_toggle)
+                self.analysis_options[key].trace_add('write', self.on_custom_ticket_analysis_toggle)
             elif key in self.configurable_analyses:
                 # Configurable analysis with custom prompt support
                 config_frame = ttk.Frame(parent)
@@ -2385,6 +2385,9 @@ class AISupportAnalyzerGUI:
         if last_file:
             self.input_file_full_path = last_file
             self.input_file_var.set(os.path.basename(last_file))
+            # Validate the restored file so column mapping is checked before analysis
+            if os.path.exists(last_file):
+                self.validate_file(last_file)
         self.limit_var.set(ui_prefs.get('limit', 'No limit'))
         
         # Load analysis options

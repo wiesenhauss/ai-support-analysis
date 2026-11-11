@@ -76,8 +76,24 @@ from utils import (
 try:
     from tqdm import tqdm
 except ImportError:
-    def tqdm(iterable, *args, **kwargs):
-        return iterable
+    class tqdm:
+        """No-op stand-in for tqdm; supports both tqdm(iterable) and tqdm(total=N) usage."""
+        def __init__(self, iterable=None, *args, **kwargs):
+            self.iterable = iterable if iterable is not None else []
+        def __iter__(self):
+            return iter(self.iterable)
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+        def update(self, n=1):
+            pass
+        def set_postfix(self, *args, **kwargs):
+            pass
+        def set_description(self, *args, **kwargs):
+            pass
+        def close(self):
+            pass
 
 try:
     from dotenv import load_dotenv

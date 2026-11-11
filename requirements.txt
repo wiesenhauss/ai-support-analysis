@@ -13,3 +13,11 @@ python-dotenv>=0.19.0
 openpyxl>=3.0.0
 XlsxWriter>=3.0.0
 PyInstaller>=5.0.0
+tqdm>=4.60.0
+SQLAlchemy>=2.0.0
+
+# Web backend (web/backend)
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
